@@ -1,0 +1,17 @@
+[Unit]
+Description=HK traffic audit seven-day retention at center-host
+After=mariadb.service
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/libexec/traffic-central/prune.py
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=TRAFFIC_CENTRAL_ROOT=/etc/traffic-central-hk
+Environment=TRAFFIC_CENTRAL_CONFIG=/etc/traffic-central-hk/writer.json
+Environment=TRAFFIC_CENTRAL_PUBLISHER=term-b1
+Environment=TRAFFIC_CENTRAL_NODE=center-host
+Environment=TRAFFIC_CENTRAL_LOCKS=traffic-audit-ingest-hk-tb1

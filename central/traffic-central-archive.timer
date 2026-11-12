@@ -1,0 +1,13 @@
+[Unit]
+Description=Bounded audit archive maintenance every five minutes
+
+[Timer]
+# Wall-clock schedule: a monotonic OnUnitActiveSec chain never re-arms if the
+# one boot-time start is missed (2026-11-08: archive stopped for 3.4 days).
+OnCalendar=*:0/5
+RandomizedDelaySec=15
+AccuracySec=1s
+Unit=traffic-central-archive.service
+
+[Install]
+WantedBy=timers.target

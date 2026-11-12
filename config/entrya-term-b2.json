@@ -1,0 +1,20 @@
+{
+  "db": "/var/lib/traffic-audit/term-b2-edge.sqlite",
+  "health": "/var/lib/traffic-audit/term-b2-edge-health.json",
+  "retention_days": 7,
+  "mode": "edge",
+  "node": "entry-a1",
+  "captures": [
+    {
+      "interface": "ens5",
+      "front_address": "172.28.43.128",
+      "tcp_ports": [31500],
+      "udp_ports": [31500]
+    }
+  ],
+  "endpoint": "http://10.77.63.2:19091",
+  "auth_file": "/etc/traffic-audit/term-b2-auth.toml",
+  "max_db_mb": 128,
+  "spool_hours": 24,
+  "upload_transport": "http"
+}

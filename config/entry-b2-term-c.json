@@ -1,0 +1,24 @@
+{
+  "db": "/var/lib/traffic-audit/edge39170.sqlite",
+  "health": "/var/lib/traffic-audit/edge39170-health.json",
+  "retention_days": 7,
+  "spool_hours": 24,
+  "mode": "edge",
+  "node": "entry-b2",
+  "max_db_mb": 128,
+  "captures": [
+    {
+      "interface": "ens5",
+      "front_address": "172.29.78.213",
+      "tcp_ports": [
+        39170
+      ],
+      "udp_ports": [
+        39170
+      ]
+    }
+  ],
+  "endpoint": "http://203.0.113.108:19091",
+  "auth_file": "/etc/traffic-audit/edge39170-auth.toml",
+  "upload_transport": "http"
+}

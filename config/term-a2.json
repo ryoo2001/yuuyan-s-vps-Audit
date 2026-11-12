@@ -1,0 +1,125 @@
+{
+  "db": "/var/lib/traffic-audit/audit.sqlite",
+  "health": "/var/lib/traffic-audit/health.json",
+  "retention_days": 7,
+  "mode": "terminal",
+  "node": "term-a2",
+  "max_db_mb": 2048,
+  "listen": [
+    "10.77.250.1",
+    "10.77.251.1"
+  ],
+  "sample_interval": 0.5,
+  "mihomo_config": "/var/lib/mita/mihomo-cm/config.yaml",
+  "inbound_ports": [
+    3310,
+    3320,
+    3366,
+    3380,
+    3390,
+    31100,
+    35800
+  ],
+  "port_aliases": {
+    "3990": 3310
+  },
+  "captures": [
+    {
+      "interface": "eth0",
+      "tcp_ports": [
+        3366,
+        3380
+      ],
+      "udp_ports": [
+        3390
+      ]
+    },
+    {
+      "interface": "etneta0",
+      "tcp_ports": [
+        3366,
+        3320,
+        31100,
+        35800
+      ],
+      "udp_ports": []
+    },
+    {
+      "interface": "etudp3990",
+      "tcp_ports": [
+        3990
+      ],
+      "udp_ports": [
+        3990
+      ]
+    },
+    {
+      "interface": "lo",
+      "tcp_ports": [
+        3310,
+        3320,
+        3366,
+        31100
+      ],
+      "udp_ports": []
+    }
+  ],
+  "peers": {
+    "entry-a1": {
+      "auth_file": "/run/easytier-net-a/config.toml",
+      "tcp_ports": [
+        28600,
+        3380
+      ],
+      "udp_ports": [
+        3390
+      ]
+    },
+    "entry-a3": {
+      "auth_file": "/run/easytier-udp3990/config.toml",
+      "tcp_ports": [
+        3990
+      ],
+      "udp_ports": [
+        3990
+      ]
+    },
+    "entry-a4": {
+      "auth_file": "/run/easytier-net-a/config.toml",
+      "tcp_ports": [
+        35800
+      ],
+      "udp_ports": []
+    }
+  },
+  "udp_listen": [],
+  "entry_routes": [
+    {
+      "node": "entry-a1",
+      "inbound_port": 3366,
+      "tunnel_ip": "10.77.250.2"
+    },
+    {
+      "node": "entry-a1",
+      "inbound_port": 3380,
+      "tunnel_ip": null
+    },
+    {
+      "node": "entry-a1",
+      "inbound_port": 3390,
+      "tunnel_ip": null
+    },
+    {
+      "node": "entry-a3",
+      "inbound_port": 3310,
+      "tunnel_ip": "10.77.251.2"
+    },
+    {
+      "node": "entry-a4",
+      "inbound_port": 35800,
+      "tunnel_ip": "10.77.250.4"
+    }
+  ],
+  "archive_node": "center-host",
+  "local_cache_hours": 24
+}

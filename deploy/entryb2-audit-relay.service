@@ -1,0 +1,20 @@
+[Unit]
+Description=ENTRYB2 internal audit TCP relay to HK Tb2
+After=network-online.target easytier-entry-b2-entrya.service easytier-entry-b2-tb2.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/libexec/traffic-audit/entryb2-tb2-relay.py
+Restart=always
+RestartSec=2
+User=root
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+MemoryMax=32M
+CPUQuota=10%
+
+[Install]
+WantedBy=multi-user.target

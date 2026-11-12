@@ -1,0 +1,32 @@
+[Unit]
+Description=Publish term-b4 audit rows to hk database
+After=network-online.target traffic-audit-termb4.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/libexec/traffic-audit/central/publish.py
+Restart=on-failure
+RestartSec=5
+UMask=0077
+RuntimeDirectory=traffic-audit-publish-termb4
+RuntimeDirectoryMode=0700
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/traffic-audit /run/traffic-audit-publish-termb4
+MemoryMax=96M
+CPUQuota=20%
+TasksMax=24
+Environment=PYTHONPATH=/usr/local/libexec/traffic-audit-pymysql.zip
+Environment=TRAFFIC_CENTRAL_TABLE_PREFIX=termb4_
+Environment=TRAFFIC_CENTRAL_PUBLISHER=term-b4
+Environment=TRAFFIC_AUDIT_PUBLISHER=term-b4
+Environment=TRAFFIC_AUDIT_CENTRAL_CONFIG=/etc/traffic-audit/central/termb4-writer.json
+Environment=TRAFFIC_AUDIT_DB=/var/lib/traffic-audit/audit.sqlite
+Environment=TRAFFIC_AUDIT_HEALTH=/var/lib/traffic-audit/central-health-termb4.json
+Environment=TRAFFIC_AUDIT_LOCK=/run/traffic-audit-publish-termb4/lock
+
+[Install]
+WantedBy=multi-user.target

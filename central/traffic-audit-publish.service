@@ -1,0 +1,25 @@
+[Unit]
+Description=Publish JP audit rows to local center-host via MySQL TCP 3306
+After=network-online.target traffic-audit.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/libexec/traffic-audit/central/publish.py
+Restart=on-failure
+RestartSec=5
+UMask=0077
+RuntimeDirectory=traffic-audit-publish
+RuntimeDirectoryMode=0700
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/traffic-audit /run/traffic-audit-publish
+MemoryMax=96M
+CPUQuota=20%
+TasksMax=24
+Environment=TRAFFIC_AUDIT_PUBLISHER=term-a1
+
+[Install]
+WantedBy=multi-user.target

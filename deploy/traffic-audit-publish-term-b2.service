@@ -1,0 +1,34 @@
+[Unit]
+Description=Publish HK Tb2 audit rows to legacy-center via restricted SSH
+After=network-online.target traffic-audit.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/libexec/traffic-audit/central/publish.py
+Restart=on-failure
+RestartSec=5
+UMask=0077
+RuntimeDirectory=traffic-audit-publish-term-b2
+RuntimeDirectoryMode=0700
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/traffic-audit /run/traffic-audit-publish-term-b2
+MemoryMax=96M
+CPUQuota=20%
+TasksMax=24
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=TRAFFIC_AUDIT_CENTRAL_ROOT=/etc/traffic-audit/central-term-b2
+Environment=TRAFFIC_AUDIT_DB=/var/lib/traffic-audit/term-b2.sqlite
+Environment=TRAFFIC_AUDIT_HEALTH=/var/lib/traffic-audit/central-health-term-b2.json
+Environment=TRAFFIC_AUDIT_PUBLISHER=term-b2
+Environment=TRAFFIC_AUDIT_SSH_HOST=203.0.113.109
+Environment=TRAFFIC_AUDIT_SSH_PORT=39238
+Environment=TRAFFIC_AUDIT_SSH_USER=root
+Environment="TRAFFIC_AUDIT_REMOTE_COMMAND=/usr/bin/env TRAFFIC_CENTRAL_ROOT=/etc/traffic-central-hk TRAFFIC_CENTRAL_CONFIG=/etc/traffic-central-hk/writer.json TRAFFIC_CENTRAL_HEALTH=/var/lib/traffic-central-hk/health-tb2.json TRAFFIC_CENTRAL_PUBLISHER=term-b2 TRAFFIC_CENTRAL_NODE=legacy-center TRAFFIC_CENTRAL_LOCK=traffic-audit-ingest-term-b2 /usr/bin/python3 /usr/local/libexec/traffic-central-hk/receive.py"
+Environment=TRAFFIC_AUDIT_LOCK=/run/traffic-audit-publish-term-b2/lock
+
+[Install]
+WantedBy=multi-user.target

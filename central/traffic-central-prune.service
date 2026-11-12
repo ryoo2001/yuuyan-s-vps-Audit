@@ -1,0 +1,13 @@
+[Unit]
+Description=Traffic audit seven-day MySQL retention
+After=docker.service
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/libexec/traffic-central/prune.py
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+MemoryMax=64M
+CPUQuota=20%

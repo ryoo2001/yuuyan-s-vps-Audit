@@ -1,0 +1,41 @@
+{
+  "db": "/var/lib/traffic-audit/audit.sqlite",
+  "health": "/var/lib/traffic-audit/health.json",
+  "retention_days": 7,
+  "mode": "terminal",
+  "tcp_stream_recovery": true,
+  "node": "term-b4",
+  "max_db_mb": 512,
+  "sample_interval": 0.5,
+  "archive_node": "center-host",
+  "local_cache_hours": 24,
+  "mihomo_config": "/etc/mihomo/config.yaml",
+  "inbound_ports": [2101],
+  "captures": [{"interface": "eth0", "tcp_ports": [2101], "udp_ports": [2101]}],
+  "listen": ["127.0.0.1"],
+  "udp_listen": [],
+  "peers": {
+    "entry-a2": {
+      "auth_file": "/etc/traffic-audit/entrya2-auth.toml",
+      "tcp_ports": [2101],
+      "udp_ports": [2101]
+    },
+    "entry-a1": {
+      "auth_file": "/etc/traffic-audit/termb4-auth.toml",
+      "tcp_ports": [2101],
+      "udp_ports": [2101]
+    }
+  },
+  "entry_routes": [
+    {"node": "entry-a1", "inbound_port": 2101, "tunnel_ip": "203.0.113.114"},
+    {"node": "entry-a2", "inbound_port": 2101, "tunnel_ip": "203.0.113.110"}
+  ],
+  "fingerprint_routes": [
+    {"node": "entry-a1", "inbound_port": 2101, "entry_port": 2101, "transport": "tcp"},
+    {"node": "entry-a1", "inbound_port": 2101, "entry_port": 2101, "transport": "udp"},
+    {"node": "entry-a2", "inbound_port": 2101, "entry_port": 2101, "transport": "tcp"},
+    {"node": "entry-a2", "inbound_port": 2101, "entry_port": 2101, "transport": "udp"}
+  ],
+  "exclusive_ingress": [],
+  "inbound_types": {"2101": ["ShadowSocks"]}
+}

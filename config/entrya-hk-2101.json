@@ -1,0 +1,24 @@
+{
+  "db": "/var/lib/traffic-audit/hk2101.sqlite",
+  "health": "/var/lib/traffic-audit/hk2101-health.json",
+  "retention_days": 7,
+  "spool_hours": 24,
+  "mode": "edge",
+  "node": "entry-a1",
+  "max_db_mb": 128,
+  "captures": [
+    {
+      "interface": "ens5",
+      "front_address": "172.28.43.128",
+      "tcp_ports": [
+        2101
+      ],
+      "udp_ports": [
+        2101
+      ]
+    }
+  ],
+  "endpoint": "http://127.0.0.1:19091",
+  "auth_file": "/etc/traffic-audit/hk2101-auth.toml",
+  "upload_transport": "http"
+}

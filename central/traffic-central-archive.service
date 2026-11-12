@@ -1,0 +1,22 @@
+[Unit]
+Description=Audit hot/warm retention and verified monthly cold archives
+After=mariadb.service
+
+[Service]
+Type=oneshot
+User=root
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/python3 /usr/local/libexec/traffic-central-storage/archive.py run --budget 20
+Nice=10
+IOSchedulingClass=idle
+CPUQuota=25%
+MemoryMax=128M
+# Batches stay inside --budget. Sealing a month reads every small part over the
+# archive mount; a kill mid-seal would only repeat that transfer on the next run.
+TimeoutStartSec=2h
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/traffic-central/archive
+RestrictAddressFamilies=AF_UNIX

@@ -1,0 +1,19 @@
+[Unit]
+Description=Receive entrya audit batches for term-b4
+After=network-online.target traffic-audit-termb4.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/libexec/traffic-audit/edge_queue.py receiver --config /etc/traffic-audit/termb4-queue.json
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+Environment=PYTHONPATH=/usr/local/libexec/traffic-audit-pymysql.zip
+
+[Install]
+WantedBy=multi-user.target

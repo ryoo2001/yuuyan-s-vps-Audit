@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily logical backup of the audit databases (03:20 Beijing time)
+
+[Timer]
+OnCalendar=*-*-* 19:20:00 UTC
+RandomizedDelaySec=300
+Persistent=true
+Unit=traffic-central-backup.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,102 @@
+{
+  "db": "/var/lib/traffic-audit/audit.sqlite",
+  "health": "/var/lib/traffic-audit/health.json",
+  "retention_days": 7,
+  "mode": "terminal",
+  "node": "term-b3",
+  "max_db_mb": 512,
+  "sample_interval": 0.5,
+  "mihomo_config": "/etc/mihomo/config.yaml",
+  "inbound_ports": [
+    24864,
+    24865,
+    2101
+  ],
+  "captures": [
+    {
+      "interface": "vxtb3",
+      "tcp_ports": [
+        24864
+      ],
+      "udp_ports": []
+    },
+    {
+      "interface": "vxcloud",
+      "tcp_ports": [
+        24864
+      ],
+      "udp_ports": []
+    },
+    {
+      "interface": "eth0",
+      "tcp_ports": [
+        2101
+      ],
+      "udp_ports": [
+        2101
+      ]
+    }
+  ],
+  "listen": [
+    "10.77.64.2",
+    "10.77.65.2",
+    "203.0.113.115"
+  ],
+  "udp_listen": [],
+  "peers": {
+    "entry-b2": {
+      "auth_file": "/etc/traffic-audit/entryb2-entrya-auth.toml",
+      "tcp_ports": [
+        24864
+      ],
+      "udp_ports": []
+    },
+    "entry-b1": {
+      "auth_file": "/etc/traffic-audit/entry-b1-auth.toml",
+      "tcp_ports": [
+        24864
+      ],
+      "udp_ports": []
+    }
+  },
+  "entry_routes": [
+    {
+      "node": "entry-b2",
+      "inbound_port": 24864,
+      "tunnel_ip": "203.0.113.111"
+    },
+    {
+      "node": "entry-b1",
+      "inbound_port": 24864,
+      "tunnel_ip": "203.0.113.112"
+    }
+  ],
+  "fingerprint_routes": [
+    {
+      "node": "entry-b2",
+      "inbound_port": 24864,
+      "entry_port": 24864,
+      "transport": "tcp"
+    },
+    {
+      "node": "entry-b1",
+      "inbound_port": 24864,
+      "entry_port": 24864,
+      "transport": "tcp"
+    }
+  ],
+  "archive_node": "center-host",
+  "local_cache_hours": 24,
+  "exclusive_ingress": [],
+  "inbound_types": {
+    "24864": [
+      "AnyTLS"
+    ],
+    "24865": [
+      "AnyTLS"
+    ],
+    "2101": [
+      "ShadowSocks"
+    ]
+  }
+}

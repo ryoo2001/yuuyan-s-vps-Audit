@@ -1,0 +1,30 @@
+[Unit]
+Description=Publish TB1 audit rows to center-host HK via MySQL TCP 3306
+After=network-online.target traffic-audit.service
+Wants=network-online.target
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/libexec/traffic-audit/central/publish.py
+Restart=on-failure
+RestartSec=5
+UMask=0077
+RuntimeDirectory=traffic-audit-publish-hk
+RuntimeDirectoryMode=0700
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/traffic-audit /run/traffic-audit-publish-hk
+MemoryMax=96M
+CPUQuota=20%
+TasksMax=24
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=TRAFFIC_AUDIT_CENTRAL_ROOT=/etc/traffic-audit/central-hk-tb1
+Environment=TRAFFIC_AUDIT_CENTRAL_CONFIG=/etc/traffic-audit/central-hk-tb1/writer.json
+Environment=TRAFFIC_AUDIT_DB=/var/lib/traffic-audit/audit.sqlite
+Environment=TRAFFIC_AUDIT_HEALTH=/var/lib/traffic-audit/central-health-hk.json
+Environment=TRAFFIC_AUDIT_PUBLISHER=term-b1
+Environment=TRAFFIC_CENTRAL_PUBLISHER=term-b1
+Environment=TRAFFIC_AUDIT_LOCK=/run/traffic-audit-publish-hk/lock
+[Install]
+WantedBy=multi-user.target

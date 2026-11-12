@@ -1,0 +1,24 @@
+{
+  "db": "/var/lib/traffic-audit/tb262057.sqlite",
+  "health": "/var/lib/traffic-audit/tb262057-health.json",
+  "retention_days": 7,
+  "spool_hours": 24,
+  "mode": "edge",
+  "node": "entry-b1",
+  "max_db_mb": 128,
+  "captures": [
+    {
+      "interface": "ens3",
+      "front_address": "172.29.17.195",
+      "tcp_ports": [
+        62057
+      ],
+      "udp_ports": [
+        62057
+      ]
+    }
+  ],
+  "endpoint": "http://203.0.113.106:19091",
+  "auth_file": "/etc/traffic-audit/tb262057-auth.toml",
+  "upload_transport": "http"
+}

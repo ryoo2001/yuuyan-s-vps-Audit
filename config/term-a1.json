@@ -1,0 +1,185 @@
+{
+  "db": "/var/lib/traffic-audit/audit.sqlite",
+  "health": "/var/lib/traffic-audit/health.json",
+  "retention_days": 7,
+  "mode": "terminal",
+  "node": "term-a1",
+  "max_db_mb": 2048,
+  "listen": [
+    "203.0.113.113"
+  ],
+  "sample_interval": 0.5,
+  "mihomo_config": "/etc/mihomo/config.yaml",
+  "inbound_ports": [
+    3309,
+    3320,
+    3366,
+    3380,
+    3390,
+    3391,
+    31100,
+    35800,
+    3310,
+    3386
+  ],
+  "captures": [
+    {
+      "interface": "eth0",
+      "tcp_ports": [
+        3309,
+        3320,
+        3366,
+        3380,
+        3391,
+        31100,
+        35800,
+        3310,
+        3386
+      ],
+      "udp_ports": [
+        3309,
+        3390,
+        3391,
+        3310,
+        3386,
+        35800
+      ]
+    }
+  ],
+  "peers": {
+    "entry-a1": {
+      "auth_file": "/etc/traffic-audit/peers/easytier-net-a.toml",
+      "tcp_ports": [
+        28600,
+        3380
+      ],
+      "udp_ports": [
+        3390,
+        28600
+      ]
+    },
+    "entry-a3": {
+      "auth_file": "/etc/traffic-audit/peers/easytier-udp3990.toml",
+      "tcp_ports": [
+        3990
+      ],
+      "udp_ports": [
+        3990
+      ]
+    },
+    "entry-a4": {
+      "auth_file": "/etc/traffic-audit/peers/easytier-net-a.toml",
+      "tcp_ports": [
+        35800,
+        3990
+      ],
+      "udp_ports": [
+        35800,
+        3990
+      ]
+    }
+  },
+  "udp_listen": [],
+  "entry_routes": [
+    {
+      "node": "entry-a1",
+      "inbound_port": 3386,
+      "tunnel_ip": "203.0.113.114"
+    },
+    {
+      "node": "entry-a1",
+      "inbound_port": 3380,
+      "tunnel_ip": "203.0.113.114"
+    },
+    {
+      "node": "entry-a1",
+      "inbound_port": 3390,
+      "tunnel_ip": "203.0.113.114"
+    },
+    {
+      "node": "entry-a3",
+      "inbound_port": 3310,
+      "tunnel_ip": "203.0.113.102"
+    },
+    {
+      "node": "entry-a4",
+      "inbound_port": 35800,
+      "tunnel_ip": "203.0.113.100"
+    }
+  ],
+  "archive_node": "center-host",
+  "local_cache_hours": 24,
+  "fingerprint_routes": [
+    {
+      "node": "entry-a1",
+      "inbound_port": 3386,
+      "entry_port": 28600,
+      "transport": "tcp"
+    },
+    {
+      "node": "entry-a1",
+      "inbound_port": 3380,
+      "entry_port": 3380,
+      "transport": "tcp"
+    },
+    {
+      "node": "entry-a1",
+      "inbound_port": 3390,
+      "entry_port": 3390,
+      "transport": "udp"
+    },
+    {
+      "node": "entry-a3",
+      "inbound_port": 3310,
+      "entry_port": 3990,
+      "transport": "tcp"
+    },
+    {
+      "node": "entry-a3",
+      "inbound_port": 3310,
+      "entry_port": 3990,
+      "transport": "udp"
+    },
+    {
+      "node": "entry-a4",
+      "inbound_port": 35800,
+      "entry_port": 35800,
+      "transport": "tcp"
+    },
+    {
+      "node": "entry-a1",
+      "inbound_port": 3386,
+      "entry_port": 28600,
+      "transport": "udp"
+    },
+    {
+      "node": "entry-a4",
+      "inbound_port": 35800,
+      "entry_port": 35800,
+      "transport": "udp"
+    },
+    {
+      "node": "entry-a4",
+      "inbound_port": 35800,
+      "entry_port": 3990,
+      "transport": "tcp"
+    },
+    {
+      "node": "entry-a4",
+      "inbound_port": 35800,
+      "entry_port": 3990,
+      "transport": "udp"
+    }
+  ],
+  "inbound_types": {
+    "3310": [
+      "ShadowSocks"
+    ],
+    "35800": [
+      "ShadowSocks"
+    ],
+    "3386": [
+      "ShadowSocks"
+    ]
+  }
+}

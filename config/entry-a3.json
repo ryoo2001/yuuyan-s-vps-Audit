@@ -1,0 +1,22 @@
+{
+  "db": "/var/lib/traffic-audit/audit.sqlite",
+  "health": "/var/lib/traffic-audit/health.json",
+  "retention_days": 7,
+  "mode": "edge",
+  "node": "entry-a3",
+  "captures": [
+    {
+      "interface": "ens3",
+      "tcp_ports": [
+        3990
+      ],
+      "udp_ports": [
+        3990
+      ]
+    }
+  ],
+  "endpoint": "http://203.0.113.101:3397",
+  "auth_file": "/etc/traffic-audit/identity.toml",
+  "max_db_mb": 128,
+  "spool_hours": 24
+}

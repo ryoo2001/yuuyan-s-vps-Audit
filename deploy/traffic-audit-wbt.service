@@ -1,0 +1,9 @@
+[Unit]
+Description=JP audit disk writeback workaround
+Before=traffic-audit.service traffic-audit-publish.service
+AssertPathExists=/sys/block/sda/queue/wbt_lat_usec
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -c "from pathlib import Path; Path('/sys/block/sda/queue/wbt_lat_usec').write_text('0')"
+RemainAfterExit=yes

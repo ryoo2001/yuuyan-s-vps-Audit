@@ -1,0 +1,49 @@
+{
+  "db": "/var/lib/traffic-audit/audit.sqlite",
+  "health": "/var/lib/traffic-audit/health.json",
+  "retention_days": 7,
+  "mode": "terminal",
+  "max_db_mb": 512,
+  "sample_interval": 0.5,
+  "archive_node": "center-host",
+  "local_cache_hours": 24,
+  "udp_listen": [],
+  "exclusive_ingress": [],
+  "node": "term-b2",
+  "mihomo_config": "/etc/mihomo/config.yaml",
+  "inbound_ports": [
+    62057
+  ],
+  "captures": [
+    {
+      "interface": "eth0",
+      "tcp_ports": [
+        62057
+      ],
+      "udp_ports": [
+        62057
+      ]
+    }
+  ],
+  "listen": [
+    "203.0.113.106"
+  ],
+  "peers": {
+    "entry-b1": {
+      "auth_file": "/etc/traffic-audit/edge-auth.toml",
+      "tcp_ports": [
+        62057
+      ],
+      "udp_ports": [
+        62057
+      ]
+    }
+  },
+  "entry_routes": [
+    {
+      "node": "entry-b1",
+      "inbound_port": 62057,
+      "tunnel_ip": "203.0.113.112"
+    }
+  ]
+}

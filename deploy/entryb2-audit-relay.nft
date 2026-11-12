@@ -1,0 +1,17 @@
+add table ip entryb2_audit_relay
+flush table ip entryb2_audit_relay
+table ip entryb2_audit_relay {
+  chain prerouting {
+    type nat hook prerouting priority dstnat; policy accept;
+    iifname "ethsh0" ip daddr 10.77.63.2 tcp dport 19091 counter dnat to 10.77.62.2:19091
+  }
+  chain postrouting {
+    type nat hook postrouting priority srcnat; policy accept;
+    oifname "etentryb20" ip daddr 10.77.62.2 tcp dport 19091 counter masquerade
+  }
+  chain forward {
+    type filter hook forward priority -30; policy accept;
+    ct state established,related counter accept
+    iifname "ethsh0" oifname "etentryb20" ip daddr 10.77.62.2 tcp dport 19091 counter accept
+  }
+}

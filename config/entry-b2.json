@@ -1,0 +1,24 @@
+{
+  "db": "/var/lib/traffic-audit/entryb2-edge.sqlite",
+  "health": "/var/lib/traffic-audit/health.json",
+  "retention_days": 7,
+  "mode": "edge",
+  "node": "entry-b2",
+  "max_db_mb": 128,
+  "captures": [
+    {
+      "interface": "ens5",
+      "front_address": "172.29.78.213",
+      "tcp_ports": [
+        28900,
+        443
+      ],
+      "udp_ports": [
+        28900
+      ]
+    }
+  ],
+  "endpoint": "http://203.0.113.107:19092",
+  "auth_file": "/etc/traffic-audit/term-b2-auth.toml",
+  "upload_transport": "http"
+}
