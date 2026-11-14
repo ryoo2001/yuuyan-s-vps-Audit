@@ -13,6 +13,12 @@ def check_views(db, text, summary_sql=None):
             c.execute("SHOW CREATE TABLE `"+table+"`")
             ddl=c.fetchone()[1].replace("CREATE TABLE ", "CREATE TEMPORARY TABLE ", 1)
             c.execute(ddl)
+        c.execute("CREATE TEMPORARY TABLE ip_geo (source_ip VARCHAR(45) PRIMARY KEY,location VARCHAR(255) NOT NULL,"
+                  "country VARCHAR(128) NOT NULL,province VARCHAR(128) NOT NULL,city VARCHAR(128) NOT NULL,"
+                  "isp VARCHAR(128) NOT NULL,lookup_status VARCHAR(32) NOT NULL,db_version VARCHAR(96) NOT NULL,"
+                  "updated_at DOUBLE NOT NULL)")
+        c.execute("INSERT INTO ip_geo VALUES(%s,%s,'','','','','matched','fixture',%s)",
+                  ('198.51.100.1', '江苏省-南京市 电信', time.time()))
         minute = int(time.time()//60)*60
         for eid, stamp, source, site, up, down in [
             ("old1", minute-60, "198.51.100.1", "example.test", 30000, 30000000),
@@ -22,10 +28,12 @@ def check_views(db, text, summary_sql=None):
             c.execute("INSERT INTO samples(event_id,ts,connection_id,node,source_ip,site,upload_bytes,download_bytes,_seq) VALUES(%s,%s,%s,'edge',%s,%s,%s,%s,1)",
                       (eid, stamp, eid, source, site, up, down))
         c.execute(statements['流量汇总']); rows=c.fetchall(); cols=[r[0] for r in c.description]
-        assert cols == ['时间','源 IP','入口机器','目标网站','流量统计'], cols
+        assert cols == ['时间','源 IP','IP归属地','入口机器','目标网站','流量统计'], cols
         assert len(rows)==2 and not any('字节' in col for col in cols)
-        summary_rows={r[3]:dict(zip(cols,r)) for r in rows}
+        summary_rows={r[4]:dict(zip(cols,r)) for r in rows}
         assert summary_rows['example.test']['流量统计']=='60.06 MB', summary_rows
+        assert summary_rows['example.test']['IP归属地']=='江苏省-南京市 电信'
+        assert summary_rows['latest.test']['IP归属地']=='未查询'
         assert summary_rows['latest.test']['流量统计']=='1.50 GB', summary_rows
         beijing_day=time.strftime('%Y/%m/%d', time.gmtime(minute+8*3600))
         assert summary_rows['example.test']['时间']==beijing_day[:7]+'/01–'+beijing_day, summary_rows
@@ -52,14 +60,14 @@ def check_views(db, text, summary_sql=None):
         )
         c.execute(statements['审计明细']); cols=[r[0] for r in c.description]
         detail_rows=c.fetchall()
-        details={r[3]:dict(zip(cols,r)) for r in detail_rows}
-        assert len([r for r in detail_rows if r[3]=='same.example']) == 1
-        assert details['valid']['最近上传速率']=='2.00 KB/s'
-        assert details['valid']['最近下载速率']=='2.00 MB/s'
-        for key in ['legacy','unknown','warmup']:
-            assert details[key]['最近上传速率']=='未采样' and details[key]['最近下载速率']=='未采样', details[key]
+        details={r[4]:dict(zip(cols,r)) for r in detail_rows}
+        assert len([r for r in detail_rows if r[4]=='same.example']) == 1
+        assert all(len(row['时间']) == 16 for row in details.values())
+        assert all('最近上传速率' not in row and '最近下载速率' not in row for row in details.values())
         assert details['unknown']['源 IP']=='未识别'
+        assert details['valid']['IP归属地']=='江苏省-南京市 电信'
+        assert details['unknown']['IP归属地']=='未识别'
         assert details['unknown']['隧道内网 IP（入口机器）']=='172.30.3.3（云厂入口：203.0.113.103）'
     return {'mysql_select_fixtures_passed': True, 'production_rows_untouched': True,
             'checks': ['monthly_source_ip_site_grouping','adaptive_mb_gb','latest_sample_included',
-                       'five_second_rates','legacy_rates_hidden','unknown_source_not_aggregated','provider_mapping_kept']}
+                       'minute_details','rate_reads_removed','summary_geolocation','unknown_source_not_aggregated','provider_mapping_kept']}

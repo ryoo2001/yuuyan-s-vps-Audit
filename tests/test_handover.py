@@ -183,12 +183,12 @@ class HandoverTests(unittest.TestCase):
         self.expect_error("SYNC_INTERVAL_SECONDS")
 
     def test_view_column_drift(self):
-        self.edit("central/views.sql", "AS `最近上传速率`", "AS `上传字节`")
+        self.edit("central/views.sql", "AS `IP归属地`", "AS `归属地原始值`")
         self.expect_error("view column order drift")
 
     def test_provider_mapping_guard(self):
         self.edit("central/views.sql", " AND (c.node IS NULL OR c.node='')", "")
-        self.expect_error("view identity/rate/dedup guard missing")
+        self.expect_error("view identity/time/dedup guard missing")
 
     def test_completed_minute_guard(self):
         self.edit("central/views.sql", "bucket < FLOOR(UNIX_TIMESTAMP()/60)*60", "bucket <= FLOOR(UNIX_TIMESTAMP()/60)*60")

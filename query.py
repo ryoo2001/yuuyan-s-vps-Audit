@@ -30,7 +30,7 @@ HEALTH_MAX_AGE = 30
 BYTE_BASIS = "mihomo_sampled_payload_lower_bound"
 DETAIL_DEDUP_WINDOW_SECONDS = 5
 DETAIL_DEDUP_BASIS = "source_ip_site_entry_fixed_window"
-SUMMARY_VIEW_COLUMNS = ("时间", "源 IP", "入口机器", "目标网站", "流量统计")
+SUMMARY_VIEW_COLUMNS = ("时间", "源 IP", "IP归属地", "入口机器", "目标网站", "流量统计")
 SUMMARY_VIEW_SCOPE = "current_beijing_calendar_month_to_latest"
 SUMMARY_VIEW_GROUPING = "source_ip_node_site"
 SUMMARY_VIEW_TIME_BASIS = "beijing_month_start_to_latest_sample_date"
@@ -437,7 +437,7 @@ def details(config, args, now):
     payload.update(
         columns=list(DETAIL_COLUMNS), rows=[dict(zip(DETAIL_COLUMNS, row)) for row in records[:args.limit]],
         has_more=len(records) > args.limit, timezone="Asia/Shanghai", byte_basis=BYTE_BASIS,
-        time_basis="last_observed", rate_basis="source_ip_five_second_sampled_payload_rate", rate_window_seconds=5, rate_scope="source_ip",
+        time_basis="last_observed", time_precision="minute",
         deduplication={
             "enabled": True,
             "window_seconds": DETAIL_DEDUP_WINDOW_SECONDS,
@@ -447,11 +447,9 @@ def details(config, args, now):
             "unknown_policy": "unknown source/site/entry rows are not merged",
         },
         warnings=[
-            "时间为北京时间的最近观测时间；每行是一条连接，不是每秒一个记录。",
-            "速率为该观测时间前 5 秒内同一真实源 IP 所有连接的已观测增量/5，不是当前在线速率或累计流量；窗口不足或未知源 IP 显示未采样。",
-            "KB/s、MB/s 按十进制自动换算（1000 KB/s = 1 MB/s）；流量汇总使用 samples 与 traffic_rollup 的原始字节累计。",
+            "时间为北京时间的最近观测时间，显示到分钟。",
             "源 IP 未关联时显示未识别，绝不替换成 source_peer；隧道地址由已核验的入口机器/路径映射。",
-            "历史记录无法补算部署前的瞬时速率；短连接和最后尾量仍可能遗漏，不能用于计费。",
+            "短连接和最后尾量仍可能遗漏，不能用于计费。",
         ],
     )
     if payload["has_more"]:

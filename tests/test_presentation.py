@@ -55,8 +55,8 @@ class PresentationTests(unittest.TestCase):
     def test_column_order_timezone_24h_and_no_ports(self):
         self.sample()
         row = self.row()
-        self.assertEqual(row, ('2026/10/04 00:01:02', '未识别', '未识别', 'example.com', '未采样', '未采样'))
-        self.assertEqual(len(row), 6)
+        self.assertEqual(row, ('2026/10/04 00:01', '未识别', '未识别', '未识别', 'example.com'))
+        self.assertEqual(len(row), 5)
         self.assertNotIn('10.77.250.1', str(row))
         self.assertEqual(self.store.db.execute('SELECT source_port FROM connection_state').fetchone()[0], 12345)
 
@@ -67,24 +67,24 @@ class PresentationTests(unittest.TestCase):
                                  ('198.51.100.27', route['node'], route['inbound_port']))
             row = self.row()
             self.assertEqual(row[1], '198.51.100.27')
-            self.assertEqual(row[2], route['tunnel_ip'] + '（' + route['node'] + '）')
+            self.assertEqual(row[3], route['tunnel_ip'] + '（' + route['node'] + '）')
 
     def test_direct_path_does_not_claim_a_tunnel(self):
         self.sample()
         self.store.db.execute("UPDATE connection_state SET source_ip='198.51.100.27',node='entry-a1',inbound_port=3380")
-        self.assertEqual(self.row()[2], '直连（entry-a1；未经过隧道）')
+        self.assertEqual(self.row()[3], '直连（entry-a1；未经过隧道）')
 
     def test_unknown_route_and_unmatched_source(self):
         self.sample()
         self.store.db.execute("UPDATE connection_state SET source_ip='198.51.100.27',node='unexpected'")
-        self.assertEqual(self.row()[2], '未核验（unexpected）')
+        self.assertEqual(self.row()[3], '未核验（unexpected）')
         self.store.db.execute('UPDATE connection_state SET source_ip=NULL')
-        self.assertEqual(self.row()[1:3], ('未识别', '未识别'))
+        self.assertEqual((self.row()[1], self.row()[3]), ('未识别', '未识别'))
 
     def test_verified_entry_remains_visible_when_source_is_unknown(self):
         self.sample()
         self.store.db.execute("UPDATE connection_state SET source_ip=NULL,node='entry-a0'")
-        self.assertEqual(self.row()[1:3], ('未识别', '10.77.250.5（entry-a0）'))
+        self.assertEqual((self.row()[1], self.row()[3]), ('未识别', '10.77.250.5（entry-a0）'))
 
     def identified_start(self, up=0, down=0):
         self.sample(up=up, down=down)
@@ -95,43 +95,43 @@ class PresentationTests(unittest.TestCase):
     def test_rates_use_ip_window_delta_not_total(self):
         self.identified_start(up=90000000, down=80000000)
         self.sample(up=90010000, down=90000000, offset=5, tick=105)
-        self.assertEqual(self.row()[4:], ('2.00 KB/s', '2.00 MB/s'))
+        self.assertEqual(tuple(self.store.db.execute('SELECT upload_bps,download_bps FROM connection_rates').fetchone()), (2000.0, 2000000.0))
         values = self.store.db.execute('SELECT interval_seconds,upload_bps,download_bps FROM connection_rates').fetchone()
         self.assertEqual(tuple(values), (5, 2000.0, 2000000.0))
 
     def test_unit_threshold_and_zero_are_real_measurements(self):
         self.identified_start()
         self.sample(up=4999995, down=5000000, offset=5, tick=105)
-        self.assertEqual(self.row()[4:], ('1000.00 KB/s', '1.00 MB/s'))
+        self.assertEqual(tuple(self.store.db.execute('SELECT upload_bps,download_bps FROM connection_rates').fetchone()), (999999.0, 1000000.0))
         self.sample(up=4999995, down=5000000, offset=10, tick=110)
-        self.assertEqual(self.row()[4:], ('0.00 KB/s', '0.00 KB/s'))
+        self.assertEqual(tuple(self.store.db.execute('SELECT upload_bps,download_bps FROM connection_rates').fetchone()), (0.0, 0.0))
 
     def test_counter_reset_or_gap_is_not_fabricated_zero(self):
         self.identified_start(up=100, down=200)
         self.sample(up=10, down=20, offset=5, tick=105)
-        self.assertEqual(self.row()[4:], ('未采样', '未采样'))
+        self.assertEqual(tuple(self.store.db.execute('SELECT upload_bps,download_bps FROM connection_rates').fetchone()), (None, None))
         self.sample(up=100, down=200, offset=20, tick=120)
-        self.assertEqual(self.row()[4:], ('未采样', '未采样'))
+        self.assertEqual(tuple(self.store.db.execute('SELECT upload_bps,download_bps FROM connection_rates').fetchone()), (None, None))
 
     def test_restart_and_short_window_do_not_fabricate_rates(self):
         self.identified_start()
         self.sample(up=200, down=400, offset=1, tick=101)
-        self.assertEqual(self.row()[4:], ('未采样', '未采样'))
+        self.assertEqual(tuple(self.store.db.execute('SELECT upload_bps,download_bps FROM connection_rates').fetchone()), (None, None))
         self.store.db.commit()
         self.store.db.close()
         self.store = Store(self.cfg)
         self.sample(up=600, down=900, offset=4, tick=104)
-        self.assertEqual(self.row()[4:], ('未采样', '未采样'))
+        self.assertEqual(tuple(self.store.db.execute('SELECT upload_bps,download_bps FROM connection_rates').fetchone()), (None, None))
 
     def test_unknown_ips_are_not_aggregated(self):
         self.sample()
         self.sample(up=90010000, down=90000000, offset=5, tick=105)
-        self.assertEqual(self.row()[4:], ('未采样', '未采样'))
+        self.assertEqual(tuple(self.store.db.execute('SELECT upload_bps,download_bps FROM connection_rates').fetchone()), (None, None))
 
     def test_clock_adjustment_does_not_distort_rate(self):
         self.identified_start()
         self.sample(up=10000, down=20000, offset=-60, tick=105)
-        self.assertEqual(self.row()[4:], ('2.00 KB/s', '4.00 KB/s'))
+        self.assertEqual(tuple(self.store.db.execute('SELECT upload_bps,download_bps FROM connection_rates').fetchone()), (2000.0, 4000.0))
 
     def test_same_source_multiple_connections_share_aggregate(self):
         self.store.sample([self.conn(0, 0, 'one'), self.conn(0, 0, 'two')], self.now, monotonic_now=99)
@@ -159,7 +159,7 @@ class PresentationTests(unittest.TestCase):
         self.store.db.execute('DELETE FROM connection_rates')
         install(self.store.db, self.cfg)
         install(self.store.db, self.cfg)
-        self.assertEqual(self.row()[4:], ('未采样', '未采样'))
+        self.assertEqual(len(self.row()), 5)
         self.assertEqual(self.store.db.execute('SELECT count(*) FROM connection_state').fetchone()[0], 1)
 
     def test_retention_prunes_rates_with_parent_connection(self):
@@ -182,7 +182,7 @@ class PresentationTests(unittest.TestCase):
         self.assertEqual(raw_count, 2)
         self.assertEqual(len(visible), 1)
         self.assertEqual(visible[0][1], '198.51.100.27')
-        self.assertEqual(visible[0][3], 'example.com')
+        self.assertEqual(visible[0][4], 'example.com')
 
     def test_month_summary_view_groups_source_site_and_adapts_mb_gb(self):
         stamp = int(time.time()) - 60
@@ -197,16 +197,19 @@ class PresentationTests(unittest.TestCase):
                  'large.example', 1500000000, 0, None),
             ],
         )
+        self.store.db.execute("INSERT INTO ip_geo VALUES('198.51.100.10','江苏省-南京市 电信','matched',0)")
         rows = self.store.db.execute('SELECT * FROM "流量汇总"').fetchall()
         self.assertEqual(tuple(c[0] for c in self.store.db.execute('SELECT * FROM "流量汇总"').description),
-                         ('时间', '源 IP', '入口机器', '目标网站', '流量统计'))
-        by_site = {row[3]: row for row in rows}
-        self.assertEqual(by_site['same.example'][4], '2.00 MB')
-        self.assertEqual(by_site['large.example'][4], '1.50 GB')
+                         ('时间', '源 IP', 'IP归属地', '入口机器', '目标网站', '流量统计'))
+        by_site = {row[4]: row for row in rows}
+        self.assertEqual(by_site['same.example'][5], '2.00 MB')
+        self.assertEqual(by_site['large.example'][5], '1.50 GB')
         self.assertRegex(by_site['same.example'][0], r'^\d{4}/\d{2}/01–\d{4}/\d{2}/\d{2}$')
         self.assertTrue(by_site['same.example'][0].startswith(
             datetime.fromtimestamp(time.time() + 8 * 3600, timezone.utc).strftime('%Y/%m/01–')))
         self.assertEqual(len(rows), 2)
+        self.assertEqual(by_site['same.example'][2], '江苏省-南京市 电信')
+        self.assertEqual(by_site['large.example'][2], '未查询')
 
     def test_month_summary_keeps_folded_bytes_after_raw_retention(self):
         # Keep both samples in the current Beijing month, even near month start.
@@ -264,7 +267,7 @@ class PresentationTests(unittest.TestCase):
         self.store.sample([self.conn(cid='two')], self.now+1, monotonic_now=101)
         out = details(self.cfg, parse_args(['details', '--limit', '1']), self.now+1)
         self.assertTrue(out['has_more'])
-        self.assertEqual(out['rows'][0]['时间'], '2026/10/04 00:01:03')
+        self.assertEqual(out['rows'][0]['时间'], '2026/10/04 00:01')
 
     def test_invalid_parameters_and_no_database_creation(self):
         for args in [['--limit', '0'], ['--limit', '101'], ['--limit', '1;DROP'], ['--limit', '1', '--limit', '2'], ['--source-ip', '10.0.0.1:80']]:
@@ -276,6 +279,16 @@ class PresentationTests(unittest.TestCase):
         self.assertFalse(Path(missing['db']).exists())
         with self.assertRaises(QueryError):
             details(dict(self.cfg, mode='edge'), parse_args(['details']), self.now)
+
+    def test_minute_display_keeps_five_second_sessions_without_rate_reads(self):
+        self.sample()
+        self.store.db.execute("UPDATE connection_state SET source_ip='198.51.100.27',node='entry-a0'")
+        self.store.sample([self.conn(cid='two')], self.now+10, monotonic_now=110)
+        self.store.db.execute("UPDATE connection_state SET source_ip='198.51.100.27',node='entry-a0'")
+        self.store.db.execute('DROP TABLE connection_rates')
+        rows = self.store.db.execute('SELECT * FROM "审计明细"').fetchall()
+        self.assertEqual(len(rows), 2)
+        self.assertEqual([row[0] for row in rows], ['2026/10/04 00:01'] * 2)
 
     def test_route_config_validation(self):
         invalid = dict(self.cfg, entry_routes=[{'node':'not-a-peer','inbound_port':31100,'tunnel_ip':'10.0.0.2'}])

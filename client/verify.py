@@ -59,7 +59,8 @@ with db.cursor() as c:
             # It is transport state, not an audit fact table, so it is optional here.
             actual_tables={name for name,kind in objects if kind=='BASE TABLE'}
             relay_queues={prefix+'edge_queue' for prefix,_,_ in namespaces if prefix}
-            assert expected_tables<=actual_tables and actual_tables-expected_tables<=relay_queues,'audit_objects_missing'
+            derived_tables={'ip_geo'}
+            assert expected_tables<=actual_tables and actual_tables-expected_tables<=relay_queues|derived_tables,'audit_objects_missing'
         else:
             assert not args.require_tiers, 'audit_tier_policy_missing'
             assert database in ('hk','region-a') and len(objects)==(41 if database=='hk' else 14), 'audit_objects_missing'

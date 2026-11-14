@@ -169,6 +169,7 @@ def create_region(db,database,prefixes,text):
                     if 'CREATE TABLE IF NOT EXISTS '+name+' (' in chunk:
                         c.execute(chunk.replace('CREATE TABLE IF NOT EXISTS '+name+' (',
                             'CREATE TABLE IF NOT EXISTS '+storage.table(database,prefix,name)+' (',1))
+        c.execute(storage.geo_ddl(database))
     for prefix in prefixes:
         install_namespace(db,database,prefix)
         tiering.install_namespace(db,database,prefix)

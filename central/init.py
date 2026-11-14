@@ -6,6 +6,7 @@ import pymysql
 from model import TABLES,create_table_sql
 from region import install_namespace,base_view_ddls
 from storage import summary_ddl
+from storage import geo_ddl
 import tiering
 import monthbook
 ROOT=Path('/etc/traffic-central')
@@ -24,6 +25,7 @@ with db.cursor() as c:
     c.execute('CREATE DATABASE IF NOT EXISTS `region-a` CHARACTER SET utf8mb4 COLLATE utf8mb4_bin')
     c.execute('USE `region-a`')
     for table in TABLES: c.execute(create_table_sql(table))
+    c.execute(geo_ddl('region-a'))
     for statement in Path('/usr/local/libexec/traffic-central/views.sql').read_text().split(';'):
         if statement.strip(): c.execute(statement)
     install_namespace(db, 'region-a', '')

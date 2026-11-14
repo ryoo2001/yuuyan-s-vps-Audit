@@ -22,14 +22,16 @@ BASELINE_FILES = (
     "audit.py", "capture.py", "transport.py", "presentation.py", "query.py", "rates.py", "maintenance.py",
     "central/model.py", "central/publish.py", "central/receive.py", "central/query.py",
     "central/prune.py", "central/views.sql", "central/init.py", "central/mysql.cnf",
+    "central/storage.py", "central/region.py", "central/detail_view.py", "central/hk_query_core.py",
+    "central/ipgeo.py", "central/traffic-central-geo.service", "central/traffic-central-geo.timer",
     "central/traffic-audit-publish.service", "central/traffic-central-prune.service",
     "central/traffic-central-prune.timer", "central/test_mysql.py", "central/test_views.py",
     "config/term-a1.json", "config/term-a2.json", "config/term-b3.json", "config/entry-b1.json", *(f"config/{node}.json" for node in PROBES),
-    "deploy/build.py", "deploy/call.mjs", "deploy/update.py", "deploy/central.py", "deploy/rename_db.py",
+    "deploy/build.py", "deploy/call.mjs", "deploy/update.py", "deploy/central.py", "deploy/ipgeo.py", "deploy/rename_db.py",
     "deploy/traffic-audit.service", "deploy/traffic-audit-hk.service",
     "deploy/traffic-audit-hk-publish.service", "deploy/traffic-audit-hk-edge.service",
     "deploy/traffic-central-hk-prune.service",
-    "deploy/traffic-central-hk-prune.timer", "deploy/traffic-central-hk-query.py",
+    "deploy/traffic-central-hk-prune.timer", "deploy/traffic-central-hk-query.py", "tests/test_ipgeo.py",
     "tools/check.py", "tools/validate.py", "tests/test_validation.py", "tests/test_update.py", "tests/test_handover.py",
 )
 EVIDENCE_FILES = (
@@ -40,8 +42,8 @@ REQUIRED_FILES = (*DOC_FILES, *BASELINE_FILES, ".gitignore", "tools/publish_chec
                   "config/entry-b1-tb3.json", "config/entryb2-tb3.json", "config/entrya-hk-2101.json", "config/entrya2-hk-2101.json", "config/term-b4.json",
                   )
 VIEWS = {
-    "审计明细": ["时间", "源 IP", "隧道内网 IP（入口机器）", "目标网站", "最近上传速率", "最近下载速率"],
-    "流量汇总": ["时间", "源 IP", "入口机器", "目标网站", "流量统计"],
+    "审计明细": ["时间", "源 IP", "IP归属地", "隧道内网 IP（入口机器）", "目标网站"],
+    "流量汇总": ["时间", "源 IP", "IP归属地", "入口机器", "目标网站", "流量统计"],
     "入口流量汇总": ["时间", "源 IP", "入口机器", "传输协议", "上行线路流量", "下行线路流量", "分钟平均上传速率", "分钟平均下载速率"],
     "访问记录": ["时间", "源 IP", "入口机器", "目标网站", "归属依据"],
     "同步状态": ["采集节点", "最后入库时间", "距上次同步秒", "确认位置", "单批最大缺失数", "统计说明"],
@@ -320,11 +322,12 @@ def check_project(root, baseline=False):
             sql = views[name]
             require(re.findall(r"\bAS `([^`]+)`", sql) == columns, f"view column order drift: {name}")
         detail = views["审计明细"]
-        for guard in ("v.interval_seconds<>5", "v.observed_at<>c.last_seen", "c.source_ip IS NULL",
+        for guard in ("%Y/%m/%d %H:%i", "c.source_ip IS NULL",
                       "c.source_peer='172.30.3.3' AND (c.node IS NULL OR c.node='')", "203.0.113.103",
                       "ROW_NUMBER() OVER", "_session_rank=1", "c.last_seen + 2.5",
-                      "c.site IS NULL OR c.site=''", "LOWER(c.site)='unknown'"):
-            require(guard in detail, f"view identity/rate/dedup guard missing: {guard}")
+                      "c.site IS NULL OR c.site=''", "LOWER(c.site)='unknown'", "g.location",
+                      "AS `IP归属地`", "LEFT JOIN ip_geo g ON g.source_ip=c.source_ip"):
+            require(guard in detail, f"view identity/time/dedup guard missing: {guard}")
         presentation = text("presentation.py")
         for guard in ("ROW_NUMBER() OVER", "_session_rank=1", "c.last_seen + 2.5",
                       "lower(c.site)='unknown'"):

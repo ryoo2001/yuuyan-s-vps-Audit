@@ -5,6 +5,7 @@ from tier_policy import ONLINE_DAYS
 VERSION = 2
 SYSTEM_DATABASES = {'mysql', 'sys', 'information_schema', 'performance_schema'}
 FRIENDLY_VIEWS = {'审计明细','流量汇总','入口流量汇总','访问记录','同步状态'}
+DERIVED_TABLES = {'ip_geo'}
 
 
 def identifier(value):
@@ -29,6 +30,22 @@ def validate(database, prefixes):
 def table(database, prefix, name):
     validate(database, (prefix,))
     return identifier(database) + '.' + identifier(prefix + name)
+
+
+def geo_ddl(database):
+    """Create the center-only source-IP geolocation cache."""
+    return ("CREATE TABLE IF NOT EXISTS " + table(database, '', 'ip_geo') + " ("
+            "source_ip VARCHAR(45) COLLATE utf8mb4_bin NOT NULL,"
+            "location VARCHAR(255) COLLATE utf8mb4_bin NOT NULL,"
+            "country VARCHAR(128) COLLATE utf8mb4_bin NOT NULL DEFAULT '',"
+            "province VARCHAR(128) COLLATE utf8mb4_bin NOT NULL DEFAULT '',"
+            "city VARCHAR(128) COLLATE utf8mb4_bin NOT NULL DEFAULT '',"
+            "isp VARCHAR(128) COLLATE utf8mb4_bin NOT NULL DEFAULT '',"
+            "lookup_status VARCHAR(32) COLLATE utf8mb4_bin NOT NULL,"
+            "db_version VARCHAR(96) COLLATE utf8mb4_bin NOT NULL,"
+            "updated_at DOUBLE NOT NULL,PRIMARY KEY(source_ip),"
+            "KEY by_status (lookup_status),KEY by_updated (updated_at)) "
+            "ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin")
 
 
 def month_key(stamp):
@@ -148,11 +165,13 @@ def summary_select(database, prefixes):
     total = '(s.upload_bytes+s.download_bytes)'
     return ("SELECT CONCAT(DATE_FORMAT(TIMESTAMPADD(SECOND,"+MONTH_START+",'1970-01-01 08:00:00'),'%Y/%m/%d'),"
             "'–',DATE_FORMAT(TIMESTAMPADD(SECOND,latest.latest_ts,'1970-01-01 08:00:00'),'%Y/%m/%d')) AS `时间`,"
-            "s.source_ip AS `源 IP`,s.node AS `入口机器`,s.site AS `目标网站`,CASE WHEN " + total + ">=1000000000 THEN "
+            "s.source_ip AS `源 IP`,CASE WHEN s.source_ip='未识别' THEN '未识别' ELSE "
+            "COALESCE(NULLIF(g.location,''),'未查询') END AS `IP归属地`,"
+            "s.node AS `入口机器`,s.site AS `目标网站`,CASE WHEN " + total + ">=1000000000 THEN "
             "CONCAT(CAST(ROUND(" + total + "/1000000000,2) AS DECIMAL(22,2)),' GB') ELSE "
             "CONCAT(CAST(ROUND(" + total + "/1000000,2) AS DECIMAL(22,2)),' MB') END AS `流量统计` FROM ("
             + totals_select(database,prefixes) + ') s CROSS JOIN (' + latest_select(database,prefixes)
-            + ') latest ORDER BY ' + total + ' DESC,s.source_ip,s.node,s.site')
+            + ') latest LEFT JOIN ' + table(database,'','ip_geo') + ' g ON g.source_ip=s.source_ip ORDER BY ' + total + ' DESC,s.source_ip,s.node,s.site')
 
 
 def summary_ddl(database, prefixes):

@@ -38,18 +38,9 @@ def _detail_key(row):
     return identity,site,route_node,inbound_port,bucket
 
 
-def _format_rate(value, interval, observed_at, last_seen, source_ip):
-    if not source_ip or interval != 5 or observed_at != last_seen or value is None:
-        return '未采样'
-    value = float(value)
-    if value < 1000000:
-        return f'{value / 1000:.2f} KB/s'
-    return f'{value / 1000000:.2f} MB/s'
-
-
 def _detail_display(row):
     (connection_id,last_seen,source_peer,inbound_port,site,source_ip,node,
-     interval,observed_at,upload_bps,download_bps,route_node,tunnel_ip) = row
+     route_node,tunnel_ip,location) = row
     source = source_ip or '未识别'
     if source_peer == '172.30.3.3' and not node:
         tunnel = '172.30.3.3（云厂入口：203.0.113.103）'
@@ -67,9 +58,11 @@ def _detail_display(row):
     else:
         tunnel = f'{tunnel_ip}（{node}）'
     stamp = datetime.fromtimestamp(float(last_seen), timezone.utc) + timedelta(hours=8)
-    return [stamp.strftime('%Y/%m/%d %H:%M:%S'), source, tunnel, site or '',
-            _format_rate(upload_bps, interval, observed_at, last_seen, source_ip),
-            _format_rate(download_bps, interval, observed_at, last_seen, source_ip)]
+    if not source_ip:
+        location = '未识别'
+    elif not location:
+        location = '未查询'
+    return [stamp.strftime('%Y/%m/%d %H:%M'), source, location, tunnel, site or '']
 
 
 def _read_details(cursor, args):
@@ -79,10 +72,10 @@ def _read_details(cursor, args):
             where.append(column + '=%s')
             params.append(value)
     sql = ('SELECT c.connection_id,c.last_seen,c.source_peer,c.inbound_port,c.site,c.source_ip,c.node,'
-           'v.interval_seconds,v.observed_at,v.upload_bps,v.download_bps,r.node,r.tunnel_ip '
+           'r.node,r.tunnel_ip,g.location '
            'FROM connection_state c '
-           'LEFT JOIN connection_rates v ON v.connection_id=c.connection_id '
-           'LEFT JOIN entry_routes r ON (r.node=c.node AND r.inbound_port=c.inbound_port) OR (COALESCE(c.node,'')='' AND r.tunnel_ip=c.source_peer)')
+           "LEFT JOIN entry_routes r ON (r.node=c.node AND r.inbound_port=c.inbound_port) OR (COALESCE(c.node,'')='' AND r.tunnel_ip=c.source_peer) "
+           'LEFT JOIN ip_geo g ON g.source_ip=c.source_ip')
     if where:
         sql += ' WHERE ' + ' AND '.join(where)
     sql += ' ORDER BY c.last_seen DESC,c.connection_id LIMIT %s OFFSET %s'
@@ -159,13 +152,13 @@ def run(args):
                 rows = _read_details(c, args)
                 out.update(columns=list(DETAIL_COLUMNS),rows=[dict(zip(DETAIL_COLUMNS,r)) for r in rows[:args.limit]],
                            has_more=len(rows)>args.limit,timezone='Asia/Shanghai',time_basis='last_observed',
-                           rate_basis='source_ip_five_second_sampled_payload_rate', rate_window_seconds=5, rate_scope='source_ip',
+                           time_precision='minute',
                            deduplication={'enabled':True,'window_seconds':DETAIL_DEDUP_WINDOW_SECONDS,
                                           'basis':DETAIL_DEDUP_BASIS,
                                           'key':['source_ip','node','inbound_port','site'],
                                           'representative':'latest_last_seen',
                                           'unknown_policy':'unknown source/site/entry rows are not merged'})
-                out['warnings'].append('速率为同一真实源 IP 在该观测时间前 5 秒的合计均速；同一真实源 IP、入口和目标网站在 5 秒会话窗口内只保留最新一行；底层连接仍保留，窗口不足或未知源显示未采样。')
+                out['warnings'].append('时间显示到分钟；同一真实源 IP、入口和目标网站在 5 秒会话窗口内只保留最新一行。')
                 return out
             column={'source_ip':'source_ip','site':'site','node':'node'}[args.group_by]
             key="COALESCE(NULLIF(`"+column+"`,''),'unknown')"

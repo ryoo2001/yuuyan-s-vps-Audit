@@ -1,0 +1,20 @@
+[Unit]
+Description=Refresh center-side IP geolocation cache
+After=network-online.target mariadb.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/python3 /usr/local/libexec/traffic-central-storage/ipgeo.py run
+Nice=15
+CPUQuota=10%
+MemoryMax=128M
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/traffic-central/geo
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+TimeoutStartSec=5min

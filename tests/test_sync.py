@@ -197,7 +197,7 @@ class CentralFreshnessTests(unittest.TestCase):
 class CentralDetailReadTests(unittest.TestCase):
     def row(self, connection_id, last_seen, site='example.test', source='198.51.100.1'):
         return (connection_id, last_seen, '172.30.3.3', 35800, site, source, 'entry-a4',
-                5, last_seen, 1000, 2000, 'entry-a4', '10.77.250.4')
+                'entry-a4', '10.77.250.4', None)
 
     def test_reader_deduplicates_fixed_window_and_keeps_latest(self):
         cursor = MagicMock()
@@ -207,8 +207,9 @@ class CentralDetailReadTests(unittest.TestCase):
         ]
         args = types.SimpleNamespace(limit=2, source_ip=None, domain=None)
         rows = central_query._read_details(cursor, args)
+        self.assertNotIn('connection_rates', cursor.execute.call_args.args[0])
         self.assertEqual(len(rows), 2)
-        self.assertEqual(rows[0][0], '1970/01/01 08:01:45')
+        self.assertEqual(rows[0][0], '1970/01/01 08:01')
         self.assertEqual(cursor.execute.call_count, 1)
 
     def test_reader_stops_after_enough_ordered_rows(self):

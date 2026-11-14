@@ -21,7 +21,8 @@ import storage
 
 INDEX = 'by_detail'
 INDEX_COLUMNS = ('last_seen', 'connection_id', 'source_ip', 'node', 'inbound_port', 'site', 'source_peer')
-COLUMNS = ['时间', '源 IP', '隧道内网 IP（入口机器）', '目标网站', '最近上传速率', '最近下载速率']
+COLUMNS = ['时间', '源 IP', 'IP归属地', '隧道内网 IP（入口机器）', '目标网站']
+LEGACY_COLUMNS = COLUMNS + ['最近上传速率', '最近下载速率']
 HOT = 'unix_timestamp() - 604800'
 ORDER = "order by `c`.`last_seen` desc,`c`.`connection_id`"
 WINDOW = (
@@ -38,6 +39,24 @@ ROUTE_PEER = ROUTE_PLAIN + " or coalesce(`c`.`node`,'') = '' and `r`.`tunnel_ip`
 UNMERGED = ("`c`.`source_ip` is null or `c`.`source_ip` = '' or `c`.`site` is null or `c`.`site` = '' "
             "or lcase(`c`.`site`) = 'unknown' or `c`.`node` is null or `c`.`node` = '' "
             "or `c`.`inbound_port` is null")
+
+
+def display_projection(sql):
+    """Project a normalized legacy definition to minute details without rate reads.
+
+    Only the two rate expressions and their primary-key joins are removed.
+    Session partitions, raw timestamps and namespace order remain in the SQL.
+    """
+    sql = sql.replace('%H:%i:%s', '%H:%i')
+    rate = (r",case when `c`\.`source_ip` is null or `c`\.`source_ip` = '' "
+            r"or `v`\.`interval_seconds` is null .*? end AS `最近(?:上传|下载)速率`")
+    sql = re.sub(rate, '', sql, flags=re.IGNORECASE)
+    sql = re.sub(r",`u`\.`最近(?:上传|下载)速率` AS `最近(?:上传|下载)速率`", '', sql)
+    sql = re.sub(r" left join `[^`]+`\.`(?:[a-z][a-z0-9]*_)?connection_rates` `v` "
+                 r"on\(`v`\.`connection_id` = `c`\.`connection_id`\)", '', sql, flags=re.IGNORECASE)
+    if '最近上传速率' in sql or '最近下载速率' in sql or '`v`.' in sql or 'connection_rates`' in sql:
+        raise ValueError('unexpected_detail_rate_expression')
+    return sql
 
 
 def index_ddl(database, prefix=''):
@@ -68,16 +87,29 @@ def parse_single(definition, database):
     """Return (select list, route join condition) of a reviewed one-namespace view."""
     text, name = definition.strip(), storage.identifier(database)
     head, found, _ = text.partition(' from (')
-    if not found or '_session_rank' in head or re.findall(r' AS `([^`]+)`', head) != COLUMNS:
+    if not found or '_session_rank' in head or re.findall(r' AS `([^`]+)`', head) not in (COLUMNS, LEGACY_COLUMNS):
         raise ValueError('unexpected_detail_view_columns')
     source = (' from ' + name + '.`connection_state` where ' + name + '.`connection_state`.`last_seen` >= ' + HOT
               + ') `c`) `c` left join ' + name + '.`connection_rates` `v` on(`v`.`connection_id` = `c`.`connection_id`))'
               ' left join ' + name + '.`entry_routes` `r` on(')
-    end = ')) where `c`.`_session_rank` = 1 ' + ORDER
-    if (text.count(source) != 1 or not text.endswith(end) or text.count(WINDOW) != 1 or text.count(HOT) != 1
-            or text.count('connection_state`') != 16):
+    if 'connection_rates`' not in text:
+        # New minute projections omit rates. MariaDB may discard redundant
+        # parentheses around joins while normalizing VIEW_DEFINITION.
+        base = (' from ' + name + '.`connection_state` where ' + name + '.`connection_state`.`last_seen` >= ' + HOT
+                + ') `c`) `c`')
+        matched = re.search(re.escape(base) + r'\)* left join ' + re.escape(name + '.`entry_routes` `r` on('), text)
+        if not matched:
+            raise ValueError('unexpected_detail_view_shape')
+        source = matched[0]
+    geo = (' left join ' + name + '.`ip_geo` `g` on(`g`.`source_ip` = `c`.`source_ip`)'
+           ' where `c`.`_session_rank` = 1 ' + ORDER)
+    if (text.count(source) != 1 or not text.endswith(geo) or text.count(WINDOW) != 1 or text.count(HOT) != 1
+            or text.count('connection_state`') != 16 or text.count('ip_geo`') != 1):
         raise ValueError('unexpected_detail_view_shape')
-    route = text[text.index(source) + len(source):-len(end)]
+    route_blob = text[text.index(source) + len(source):text.index(geo)]
+    if not route_blob.endswith('))'):
+        raise ValueError('unexpected_detail_route_join')
+    route = route_blob[:-2]
     if route not in (ROUTE_PLAIN, ROUTE_PEER):
         raise ValueError('unexpected_detail_route_join')
     return head, route
@@ -95,9 +127,10 @@ def single_select(head, database, route):
               ' and floor((`d`.`last_seen` + 2.5) / 5) = floor((`c`.`last_seen` + 2.5) / 5)'
               ' and (`d`.`last_seen` > `c`.`last_seen` or `d`.`last_seen` = `c`.`last_seen`'
               ' and `d`.`connection_id` < `c`.`connection_id`))')
-    return (head + ' from ((' + table('connection_state') + ' `c`' + hint + ' left join '
+    return display_projection(head + ' from ((' + table('connection_state') + ' `c`' + hint + ' left join '
             + table('connection_rates') + ' `v` on(`v`.`connection_id` = `c`.`connection_id`)) left join '
-            + table('entry_routes') + ' `r` on(' + route + ')) where `c`.`last_seen` >= ' + HOT
+            + table('entry_routes') + ' `r` on(' + route + ')) left join '
+            + storage.table(database, '', 'ip_geo') + ' `g` on(`g`.`source_ip` = `c`.`source_ip`) where `c`.`last_seen` >= ' + HOT
             + ' and (' + UNMERGED + ' or ' + latest + ') ' + ORDER)
 
 
@@ -105,9 +138,10 @@ def parse_union(definition, database):
     """Return (select list, namespaces) of a reviewed multi-namespace view."""
     text, name = definition.strip(), storage.identifier(database)
     head, found, _ = text.partition(' from (')
-    if not found or '_session_rank' in head or re.findall(r' AS `([^`]+)`', head) != COLUMNS:
+    if not found or '_session_rank' in head or re.findall(r' AS `([^`]+)`', head) not in (COLUMNS, LEGACY_COLUMNS):
         raise ValueError('unexpected_detail_view_columns')
-    end = (' on(`r`.`source_id` = `c`.`source_id` and (' + ROUTE_PEER + '))) where `c`.`_session_rank` = 1 ' + ORDER)
+    end = (' on(`r`.`source_id` = `c`.`source_id` and (' + ROUTE_PEER + '))) left join `'
+           + database + '`.`ip_geo` `g` on(`g`.`source_ip` = `c`.`source_ip`) where `c`.`_session_rank` = 1 ' + ORDER)
     window = WINDOW.replace('partition by case', 'partition by `c`.`source_id`,case', 1)
     found = {table: re.findall(' from ' + re.escape(name) + r'\.`([a-z][a-z0-9]*_)' + table + '`', text)
              for table in ('connection_state', 'connection_rates', 'entry_routes')}
@@ -139,10 +173,11 @@ def union_select(head, database, prefixes, hot=None):
                  '`c`.`source_ip` AS `source_ip`,`c`.`node` AS `node`,' + WINDOW[:-len(' from (select ')]
                  + ' from ' + table('connection_state') + ' `c`'
                  + (' where `c`.`last_seen` >= ' + hot if hot else ''))
-        branches.append(head + ",`c`.`last_seen` AS `_last_seen`,concat('" + prefix[:-1]
+        branches.append(display_projection(head + ",`c`.`last_seen` AS `_last_seen`,concat('" + prefix[:-1]
                         + "/',`c`.`connection_id`) AS `_connection_id` from ((" + '(' + inner + ') `c` left join '
                         + table('connection_rates') + ' `v` on(`v`.`connection_id` = `c`.`connection_id`)) left join '
-                        + table('entry_routes') + ' `r` on(' + ROUTE_PEER + ')) where `c`.`_session_rank` = 1')
+                        + table('entry_routes') + ' `r` on(' + ROUTE_PEER + ')) left join '
+                        + storage.table(database, '', 'ip_geo') + ' `g` on(`g`.`source_ip` = `c`.`source_ip`) where `c`.`_session_rank` = 1'))
     return ('select ' + ','.join('`u`.`' + column + '` AS `' + column + '`' for column in COLUMNS) + ' from ('
             + ' union all '.join(branches) + ') `u` order by `u`.`_last_seen` desc,`u`.`_connection_id`')
 

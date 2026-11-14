@@ -23,6 +23,7 @@ def to_sqlite(sql, database, prefixes):
     for prefix in prefixes:
         for table in ('connection_state', 'connection_rates', 'entry_routes'):
             sql = sql.replace('`%s`.`%s%s`' % (database, prefix, table), '`%s%s`' % (prefix, table))
+    sql = sql.replace('`%s`.`ip_geo`' % database, '`ip_geo`')
     sql = sql.replace(' force index (`by_detail`)', '').replace('lcase(', 'lower(')
     sql = sql.replace('unix_timestamp()', str(NOW))
     sql = re.sub(r"date_format\('1970-01-01 08:00:00' \+ interval floor\(`c`\.`last_seen`\) second,'[^']*'\)",
@@ -55,6 +56,7 @@ class DetailViewTests(unittest.TestCase):
                 if number % 3:
                     db.execute('INSERT INTO `%sconnection_rates` VALUES(?,?,?,?,?,1)' % prefix,
                                (row[0], seen if number % 2 else seen - 1, rng.choice((5, 3, None)), 1500.0, 2500000.0))
+        db.execute('CREATE TABLE ip_geo (source_ip TEXT PRIMARY KEY,location TEXT)')
         return db
 
     def test_single_namespace_antijoin_equals_window_definition(self):
@@ -67,7 +69,7 @@ class DetailViewTests(unittest.TestCase):
             db = self.database(('',), seed)
             old_rows = db.execute(to_sqlite(JP, 'region-a', ('',))).fetchall()
             new_rows = db.execute(to_sqlite(new, 'region-a', ('',))).fetchall()
-            self.assertEqual(old_rows, new_rows, seed)
+            self.assertEqual([row[:5] for row in old_rows], new_rows, seed)
             total = db.execute('SELECT COUNT(*) FROM connection_state WHERE last_seen>=?', (NOW - 604800,)).fetchone()[0]
             self.assertTrue(0 < len(new_rows) < total, 'fixture must exercise both merged and kept rows')
 
@@ -78,8 +80,20 @@ class DetailViewTests(unittest.TestCase):
         self.assertNotIn(detail_view.HOT, new)     # visible rows are not narrowed
         for seed in range(3):
             db = self.database(prefixes, seed)
-            self.assertEqual(db.execute(to_sqlite(HK, 'hk', prefixes)).fetchall(),
+            self.assertEqual([row[:5] for row in db.execute(to_sqlite(HK, 'hk', prefixes)).fetchall()],
                              db.execute(to_sqlite(new, 'hk', prefixes)).fetchall(), seed)
+
+    def test_new_projection_can_be_optimized_without_rate_tables(self):
+        projected = detail_view.display_projection(JP)
+        head, route = detail_view.parse_single(projected, 'region-a')
+        new = detail_view.single_select(head, 'region-a', route)
+        self.assertNotIn('connection_rates', new)
+        self.assertNotIn('%H:%i:%s', new)
+        self.assertIn('%H:%i', new)
+        db = self.database(('',), 7)
+        db.execute('DROP TABLE connection_rates')
+        self.assertEqual(db.execute(to_sqlite(projected, 'region-a', ('',))).fetchall(),
+                         db.execute(to_sqlite(new, 'region-a', ('',))).fetchall())
 
     def test_unreviewed_definitions_are_refused(self):
         for broken in (JP.replace('604800', '86400'), JP.replace("lcase(`c`.`site`) = 'unknown'", '1=0'),

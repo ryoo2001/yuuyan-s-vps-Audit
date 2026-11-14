@@ -1,10 +1,10 @@
 """Human-readable SQLite view. No raw identity fallback or cumulative-byte rates."""
 import ipaddress
 
-COLUMNS = ("时间", "源 IP", "隧道内网 IP（入口机器）", "目标网站", "最近上传速率", "最近下载速率")
+COLUMNS = ("时间", "源 IP", "IP归属地", "隧道内网 IP（入口机器）", "目标网站")
 DETAIL_DEDUP_WINDOW_SECONDS = 5
 DETAIL_DEDUP_BASIS = "source_ip_site_entry_fixed_window"
-SUMMARY_VIEW_COLUMNS = ("时间", "源 IP", "入口机器", "目标网站", "流量统计")
+SUMMARY_VIEW_COLUMNS = ("时间", "源 IP", "IP归属地", "入口机器", "目标网站", "流量统计")
 SUMMARY_VIEW_SCOPE = "current_beijing_calendar_month_to_latest"
 SUMMARY_VIEW_GROUPING = "source_ip_node_site"
 SUMMARY_VIEW_TIME_BASIS = "beijing_month_start_to_latest_sample_date"
@@ -18,6 +18,9 @@ def install(db, config):
     db.execute("""CREATE TABLE IF NOT EXISTS entry_routes(
         node TEXT, inbound_port INTEGER, tunnel_ip TEXT,
         PRIMARY KEY(node,inbound_port))""")
+    db.execute("""CREATE TABLE IF NOT EXISTS ip_geo(
+        source_ip TEXT PRIMARY KEY, location TEXT NOT NULL,
+        lookup_status TEXT NOT NULL DEFAULT 'center_only', updated_at REAL)""")
     routes = []
     for route in config.get("entry_routes", []):
         node, port, address = route["node"], route["inbound_port"], route["tunnel_ip"]
@@ -30,16 +33,12 @@ def install(db, config):
     db.executemany("INSERT INTO entry_routes VALUES(?,?,?)", routes)
     db.execute("CREATE INDEX IF NOT EXISTS connection_seen ON connection_state(last_seen DESC)")
 
-    def rate(column):
-        # Decimal units: 1000 B/s = 1 KB/s; 1000 KB/s = 1 MB/s.
-        return f"""CASE WHEN c.source_ip IS NULL OR c.source_ip='' OR r.interval_seconds IS NULL OR r.interval_seconds<>5 OR r.observed_at != c.last_seen OR r.{column} IS NULL THEN '未采样'
-          WHEN r.{column} >= 1000000 THEN printf('%.2f MB/s', r.{column}/1000000.0)
-          ELSE printf('%.2f KB/s', r.{column}/1000.0) END"""
-
     db.execute('DROP VIEW IF EXISTS "审计明细"')
     db.execute(f"""CREATE VIEW "审计明细" AS SELECT
-        strftime('%Y/%m/%d %H:%M:%S',c.last_seen,'unixepoch','+8 hours') AS "时间",
+        strftime('%Y/%m/%d %H:%M',c.last_seen,'unixepoch','+8 hours') AS "时间",
         COALESCE(NULLIF(c.source_ip,''),'未识别') AS "源 IP",
+        CASE WHEN c.source_ip IS NULL OR c.source_ip='' THEN '未识别'
+             ELSE COALESCE(NULLIF(g.location,''),'未查询') END AS "IP归属地",
         CASE WHEN c.node IS NULL OR c.node='' THEN
             CASE WHEN e.node IS NULL THEN '未识别'
                  WHEN e.tunnel_ip IS NULL THEN '直连（' || e.node || '；未经过隧道）'
@@ -48,9 +47,7 @@ def install(db, config):
           WHEN e.node IS NULL THEN '未核验（' || c.node || '）'
           WHEN e.tunnel_ip IS NULL THEN '直连（' || c.node || '；未经过隧道）'
           ELSE e.tunnel_ip || '（' || c.node || '）' END AS "隧道内网 IP（入口机器）",
-        c.site AS "目标网站",
-        {rate('upload_bps')} AS "最近上传速率",
-        {rate('download_bps')} AS "最近下载速率"
+        c.site AS "目标网站"
       FROM (
         SELECT c.*,
           ROW_NUMBER() OVER (
@@ -70,7 +67,7 @@ def install(db, config):
         FROM connection_state c
       ) c
       LEFT JOIN entry_routes e ON (e.node=c.node AND e.inbound_port=c.inbound_port) OR (COALESCE(c.node,'')='' AND e.tunnel_ip=c.source_peer)
-      LEFT JOIN connection_rates r ON r.connection_id=c.connection_id
+      LEFT JOIN ip_geo g ON g.source_ip=c.source_ip
       WHERE c._session_rank=1
       ORDER BY c.last_seen DESC, c.connection_id""")
 
@@ -96,6 +93,8 @@ def install(db, config):
       SELECT strftime('%Y/%m/01','now','+8 hours') || '–' ||
           strftime('%Y/%m/%d',latest.latest_ts,'unixepoch','+8 hours') AS "时间",
         COALESCE(NULLIF(s.source_ip,''),'未识别') AS "源 IP",
+        CASE WHEN s.source_ip IS NULL OR s.source_ip='' THEN '未识别'
+             ELSE COALESCE(NULLIF((SELECT g.location FROM ip_geo g WHERE g.source_ip=s.source_ip),''),'未查询') END AS "IP归属地",
         COALESCE(NULLIF(s.node,''),'未识别') AS "入口机器",
         COALESCE(NULLIF(s.site,''),'未识别') AS "目标网站",
         CASE WHEN SUM(COALESCE(s.upload_bytes,0)+COALESCE(s.download_bytes,0)) >= 1000000000
@@ -104,4 +103,4 @@ def install(db, config):
       FROM filtered s CROSS JOIN latest
       GROUP BY latest.latest_ts, COALESCE(NULLIF(s.source_ip,''),'未识别'),
         COALESCE(NULLIF(s.node,''),'未识别'), COALESCE(NULLIF(s.site,''),'未识别')
-      ORDER BY SUM(COALESCE(s.upload_bytes,0)+COALESCE(s.download_bytes,0)) DESC, 2, 3, 4""" )
+      ORDER BY SUM(COALESCE(s.upload_bytes,0)+COALESCE(s.download_bytes,0)) DESC, 2, 4, 5""" )
