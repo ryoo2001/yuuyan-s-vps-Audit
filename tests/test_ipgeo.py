@@ -39,8 +39,8 @@ class IpGeoTests(unittest.TestCase):
     def test_location_format(self):
         self.assertEqual(ipgeo.format_location('中国|江苏省|南京市|电信|CN'), '江苏省-南京市 电信')
         self.assertEqual(ipgeo.format_location('中国|北京|北京市|联通|CN'), '北京市 联通')
-        self.assertEqual(ipgeo.format_location('United States|California|San Jose|xTom|US'),
-                         'California-San Jose xTom')
+        self.assertEqual(ipgeo.format_location('United States|California|San Jose|ExampleISP|US'),
+                         'California-San Jose ExampleISP')
         self.assertEqual(ipgeo.format_location('中国|0|0|0|CN'), '')
 
     def test_non_global_addresses_are_not_attributed(self):
