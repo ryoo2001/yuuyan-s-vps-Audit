@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
-"""Center-only IP geolocation cache built from public DB-IP Lite MMDB data."""
+"""Center-only IP geolocation cache built from the public ip2region xdb data."""
 
 from __future__ import annotations
 
 import argparse
-import ctypes
-import gzip
 import hashlib
 import ipaddress
 import json
@@ -13,7 +11,6 @@ import os
 from pathlib import Path
 import re
 import time
-from datetime import datetime, timezone
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
@@ -23,104 +20,99 @@ import storage
 GEO_TABLE = "ip_geo"
 DEFAULT_DATABASES = ("region-a", "hk")
 DATA_ROOT = Path(os.environ.get("TRAFFIC_CENTRAL_GEO_ROOT", "/var/lib/traffic-central/geo"))
-DBIP_CITY_URL = os.environ.get(
-    "TRAFFIC_CENTRAL_GEO_CITY_URL",
-    "https://download.db-ip.com/free/dbip-city-lite-{month}.mmdb.gz",
+V4_URL = os.environ.get(
+    "TRAFFIC_CENTRAL_GEO_V4_URL",
+    "https://raw.githubusercontent.com/lionsoul2014/ip2region/master/data/ip2region_v4.xdb",
 )
-DBIP_ASN_URL = os.environ.get(
-    "TRAFFIC_CENTRAL_GEO_ASN_URL",
-    "https://download.db-ip.com/free/dbip-asn-lite-{month}.mmdb.gz",
+V6_URL = os.environ.get(
+    "TRAFFIC_CENTRAL_GEO_V6_URL",
+    "https://raw.githubusercontent.com/lionsoul2014/ip2region/master/data/ip2region_v6.xdb",
 )
-DOWNLOAD_INTERVAL = 30 * 24 * 60 * 60
+DOWNLOAD_INTERVAL = 24 * 60 * 60
 MAX_DATABASE_BYTES = 256 * 1024 * 1024
 DEFAULT_BATCH_SIZE = 500
+DETAIL_COLUMNS = ('时间', '源 IP', 'IP归属地', '隧道内网 IP（入口机器）', '目标网站', '最近上传速率', '最近下载速率')
 MUNICIPALITIES = {"北京", "北京市", "上海", "上海市", "天津", "天津市", "重庆", "重庆市"}
 EMPTY_FIELD = {"", "0", "未知", "unknown", "内网IP", "内网 IP"}
 
 
-class _MMDBEntry(ctypes.Structure):
-    _fields_ = [("mmdb", ctypes.c_void_p), ("offset", ctypes.c_uint32)]
+def _le_uint16(value, offset):
+    return value[offset] | value[offset + 1] << 8
 
 
-class _MMDBResult(ctypes.Structure):
-    _fields_ = [("found_entry", ctypes.c_bool), ("entry", _MMDBEntry), ("netmask", ctypes.c_uint16)]
+def _le_uint32(value, offset):
+    return (
+        value[offset]
+        | value[offset + 1] << 8
+        | value[offset + 2] << 16
+        | value[offset + 3] << 24
+    )
 
 
-class _MMDBValue(ctypes.Union):
-    _fields_ = [
-        ("pointer", ctypes.c_uint32), ("utf8_string", ctypes.c_char_p),
-        ("double_value", ctypes.c_double), ("bytes", ctypes.POINTER(ctypes.c_uint8)),
-        ("uint16", ctypes.c_uint16), ("uint32", ctypes.c_uint32),
-        ("int32", ctypes.c_int32), ("uint64", ctypes.c_uint64),
-        # GCC's unsigned __int128 has 16-byte alignment on the center host.
-        # c_longdouble gives ctypes the same alignment and size.
-        ("uint128", ctypes.c_longdouble),
-        ("boolean", ctypes.c_bool), ("float_value", ctypes.c_float),
-    ]
+class XdbReader:
+    """Small read-only xdb reader using the upstream file format."""
 
-
-class _MMDBData(ctypes.Structure):
-    _fields_ = [
-        ("has_data", ctypes.c_bool), ("value", _MMDBValue),
-        ("offset", ctypes.c_uint32), ("offset_to_next", ctypes.c_uint32),
-        ("data_size", ctypes.c_uint32), ("type", ctypes.c_uint32),
-    ]
-
-
-class MmdbReader:
-    """Small ctypes wrapper around the center host's libmaxminddb."""
-
-    def __init__(self, path):
+    def __init__(self, path, ip_version):
         self.path = Path(path)
-        self._handle = ctypes.create_string_buffer(512)
-        try:
-            self._lib = ctypes.CDLL("libmaxminddb.so.0")
-        except OSError as exc:
-            raise RuntimeError("libmaxminddb_unavailable") from exc
-        self._lib.MMDB_open.argtypes = [ctypes.c_char_p, ctypes.c_uint32, ctypes.c_void_p]
-        self._lib.MMDB_open.restype = ctypes.c_int
-        self._lib.MMDB_close.argtypes = [ctypes.c_void_p]
-        self._lib.MMDB_lookup_string.argtypes = [
-            ctypes.c_void_p, ctypes.c_char_p, ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int)
-        ]
-        self._lib.MMDB_lookup_string.restype = _MMDBResult
-        self._lib.MMDB_aget_value.argtypes = [
-            ctypes.POINTER(_MMDBEntry), ctypes.POINTER(_MMDBData), ctypes.POINTER(ctypes.c_char_p)
-        ]
-        self._lib.MMDB_aget_value.restype = ctypes.c_int
-        status = self._lib.MMDB_open(os.fsencode(self.path), 1, ctypes.byref(self._handle))
-        if status != 0:
-            raise ValueError("dbip_mmdb_open_failed:%d" % status)
-        self.version = hashlib.sha256(self.path.read_bytes()).hexdigest()[:24]
-
-    def close(self):
-        if self._handle is not None:
-            self._lib.MMDB_close(ctypes.byref(self._handle))
-            self._handle = None
-
-    def __del__(self):
-        try:
-            self.close()
-        except Exception:
-            pass
-
-    def lookup(self, address, *path):
-        gai_error = ctypes.c_int()
-        mmdb_error = ctypes.c_int()
-        result = self._lib.MMDB_lookup_string(
-            ctypes.byref(self._handle), str(address).encode("ascii"),
-            ctypes.byref(gai_error), ctypes.byref(mmdb_error)
+        self.content = self.path.read_bytes()
+        if len(self.content) < 256 + 524288:
+            raise ValueError("geo_xdb_too_small")
+        structure = _le_uint16(self.content, 0)
+        if structure not in (2, 3):
+            raise ValueError("geo_xdb_structure_unsupported")
+        header_ip_version = 4 if structure == 2 else _le_uint16(self.content, 16)
+        if header_ip_version != ip_version:
+            raise ValueError("geo_xdb_ip_version_mismatch")
+        self.ip_version = ip_version
+        self.index_size = 14 if ip_version == 4 else 38
+        self.start_index = _le_uint32(self.content, 8)
+        self.end_index = _le_uint32(self.content, 12)
+        if not 256 + 524288 <= self.start_index <= self.end_index <= len(self.content):
+            raise ValueError("geo_xdb_index_bounds_invalid")
+        self.vector_index = self.content[256 : 256 + 524288]
+        self.version = "%d-%d-%d" % (
+            structure,
+            _le_uint32(self.content, 4),
+            int(hashlib.sha256(self.content).hexdigest()[:16], 16),
         )
-        if gai_error.value or mmdb_error.value or not result.found_entry:
+
+    def search(self, value):
+        address = ipaddress.ip_address(value)
+        if address.version != self.ip_version:
             return ""
-        path_array = (ctypes.c_char_p * (len(path) + 1))(
-            *(item.encode("utf8") for item in path), None
-        )
-        data = _MMDBData()
-        status = self._lib.MMDB_aget_value(ctypes.byref(result.entry), ctypes.byref(data), path_array)
-        if status != 0 or not data.has_data or data.type != 2 or not data.value.utf8_string:
+        packed = address.packed
+        index = packed[0] * 256 * 8 + packed[1] * 8
+        start = _le_uint32(self.vector_index, index)
+        end = _le_uint32(self.vector_index, index + 4)
+        if not start or not end:
             return ""
-        return ctypes.string_at(data.value.utf8_string, data.data_size).decode("utf8", "replace")
+        low = 0
+        high = (end - start) // self.index_size
+        while low <= high:
+            middle = (low + high) >> 1
+            pointer = start + middle * self.index_size
+            record = self.content[pointer : pointer + self.index_size]
+            if len(record) != self.index_size:
+                raise ValueError("geo_xdb_index_truncated")
+            if self.ip_version == 4:
+                lower = record[3::-1]
+                upper = record[7:3:-1]
+            else:
+                lower = record[:16]
+                upper = record[16:32]
+            if packed < lower:
+                high = middle - 1
+            elif packed > upper:
+                low = middle + 1
+            else:
+                offset = 8 if self.ip_version == 4 else 32
+                length = _le_uint16(record, offset)
+                data_pointer = _le_uint32(record, offset + 2)
+                data = self.content[data_pointer : data_pointer + length]
+                if len(data) != length:
+                    raise ValueError("geo_xdb_region_truncated")
+                return data.decode("utf-8")
+        return ""
 
 
 def format_location(region):
@@ -162,45 +154,12 @@ def lookup_region(readers, value):
     normalized = str(address)
     if not address.is_global:
         return "未识别", "non_global", ""
-    city = readers.get("city")
-    asn = readers.get("asn")
-    if city is None:
+    reader = readers.get(address.version)
+    if reader is None:
         return "未识别", "database_unavailable", ""
-    province = city_value(city, normalized, ("subdivisions", "0", "names", "zh-CN"),
-                          ("subdivisions", "0", "names", "zh"),
-                          ("subdivisions", "0", "names", "en"))
-    city_name = city_value(city, normalized, ("city", "names", "zh-CN"),
-                           ("city", "names", "zh"), ("city", "names", "en"))
-    operator = ""
-    if asn is not None:
-        operator = city_value(asn, normalized, ("autonomous_system_organization",),
-                              ("traits", "autonomous_system_organization"),
-                              ("traits", "isp"))
-    location = format_dbip_location(province, city_name, operator)
-    return location or "未识别", "matched" if location else "not_found", "%s|%s|%s" % (province, city_name, operator)
-
-
-def city_value(reader, address, *paths):
-    for path in paths:
-        value = reader.lookup(address, *path)
-        if value and value.strip() not in EMPTY_FIELD:
-            return value.strip()
-    return ""
-
-
-def format_dbip_location(province, city_name, operator):
-    province = "" if province in EMPTY_FIELD else province
-    city_name = "" if city_name in EMPTY_FIELD else city_name
-    operator = "" if operator in EMPTY_FIELD else operator
-    if province in MUNICIPALITIES or city_name in MUNICIPALITIES:
-        place = next((value for value in (province, city_name) if value), "")
-        if place in {"北京", "上海", "天津", "重庆"}:
-            place += "市"
-    elif province and city_name and province != city_name:
-        place = province + "-" + city_name
-    else:
-        place = province or city_name
-    return (place + " " + operator).strip()
+    region = reader.search(normalized)
+    location = format_location(region)
+    return location or "未识别", "matched" if location else "not_found", region
 
 
 def _database_names(value):
@@ -212,37 +171,37 @@ def _database_names(value):
     return names
 
 
-def _download(path, url, now=None):
+def _download(path, url, ip_version, now=None):
     now = time.time() if now is None else now
     if path.is_file() and now - path.stat().st_mtime < DOWNLOAD_INTERVAL:
-        MmdbReader(path).close()
+        XdbReader(path, ip_version)
         return "cached"
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     temporary = path.with_name("." + path.name + ".download")
     request = Request(url, headers={"User-Agent": "traffic-audit-ipgeo/1"})
     try:
-        with urlopen(request, timeout=45) as response, gzip.GzipFile(fileobj=response) as source, temporary.open("wb") as output:
+        with urlopen(request, timeout=45) as response, temporary.open("wb") as output:
             length = response.headers.get("Content-Length")
             if length is not None and int(length) > MAX_DATABASE_BYTES:
-                raise ValueError("dbip_mmdb_download_too_large")
+                raise ValueError("geo_xdb_download_too_large")
             total = 0
             while True:
-                chunk = source.read(1024 * 1024)
+                chunk = response.read(1024 * 1024)
                 if not chunk:
                     break
                 total += len(chunk)
                 if total > MAX_DATABASE_BYTES:
-                    raise ValueError("dbip_mmdb_download_too_large")
+                    raise ValueError("geo_xdb_download_too_large")
                 output.write(chunk)
             output.flush()
             os.fsync(output.fileno())
-        MmdbReader(temporary).close()
+        XdbReader(temporary, ip_version)
         os.replace(temporary, path)
     except (OSError, URLError, ValueError):
         if temporary.exists():
             temporary.unlink()
         if path.is_file():
-            MmdbReader(path).close()
+            XdbReader(path, ip_version)
             return "stale"
         raise
     return "updated"
@@ -395,15 +354,14 @@ def run_once(databases=None, data_root=DATA_ROOT, download=True, connector=conne
     databases = tuple(databases or DEFAULT_DATABASES)
     data_root = Path(data_root)
     statuses = {}
-    month = datetime.now(timezone.utc).strftime("%Y-%m")
-    paths = {"city": data_root / "dbip-city-lite.mmdb", "asn": data_root / "dbip-asn-lite.mmdb"}
-    urls = {"city": DBIP_CITY_URL.format(month=month), "asn": DBIP_ASN_URL.format(month=month)}
-    for kind in ("city", "asn"):
+    paths = {4: data_root / "ip2region_v4.xdb", 6: data_root / "ip2region_v6.xdb"}
+    urls = {4: V4_URL, 6: V6_URL}
+    for version in (4, 6):
         if download:
-            statuses[kind] = _download(paths[kind], urls[kind])
-        elif not paths[kind].is_file():
-            raise FileNotFoundError(str(paths[kind]))
-    readers = {kind: MmdbReader(paths[kind]) for kind in paths}
+            statuses[str(version)] = _download(paths[version], urls[version], version)
+        elif not paths[version].is_file():
+            raise FileNotFoundError(str(paths[version]))
+    readers = {version: XdbReader(paths[version], version) for version in (4, 6) if paths[version].is_file()}
     db = connector()
     try:
         result = {"downloads": statuses, "databases": []}
@@ -418,8 +376,6 @@ def run_once(databases=None, data_root=DATA_ROOT, download=True, connector=conne
         raise
     finally:
         db.close()
-        for reader in readers.values():
-            reader.close()
 
 
 def main(argv=None):
@@ -434,9 +390,12 @@ def main(argv=None):
     if args.action == "lookup":
         if not args.ip:
             parser.error("--ip is required for lookup")
+        readers = {}
         root = Path(args.data_root)
-        readers = {kind: MmdbReader(root / ("dbip-%s-lite.mmdb" % kind))
-                   for kind in ("city", "asn") if (root / ("dbip-%s-lite.mmdb" % kind)).is_file()}
+        for version in (4, 6):
+            path = root / ("ip2region_v%d.xdb" % version)
+            if path.is_file():
+                readers[version] = XdbReader(path, version)
         print(json.dumps({"ip": args.ip, "location": lookup(readers, args.ip)[0]}, ensure_ascii=False))
         return
     if args.action == "schema":
