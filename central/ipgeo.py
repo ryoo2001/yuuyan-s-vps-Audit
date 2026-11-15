@@ -77,6 +77,8 @@ class MmdbReader:
             self._lib = ctypes.CDLL("libmaxminddb.so.0")
         except OSError as exc:
             raise RuntimeError("libmaxminddb_unavailable") from exc
+        if ctypes.alignment(_MMDBValue) != 16 or ctypes.sizeof(_MMDBData) != 48:
+            raise RuntimeError("libmaxminddb_layout_unsupported")
         self._lib.MMDB_open.argtypes = [ctypes.c_char_p, ctypes.c_uint32, ctypes.c_void_p]
         self._lib.MMDB_open.restype = ctypes.c_int
         self._lib.MMDB_close.argtypes = [ctypes.c_void_p]
