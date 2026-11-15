@@ -7,7 +7,7 @@
 | 多台落地机的汇总查询需扫描全表 | 先按落地机分别汇总，再合并汇总结果 | `central/hk_summary.py` |
 | 近期明细查询较慢 | 按时间及常用条件建立索引，默认仅查询最近 7 天 | `central/detail_view.py`、`central/storage.py` |
 | 明细查询关联速率表 | 移除两列最近速率及其表关联，按原始时间排序后显示到分钟 | `central/detail_view.py`、`central/query.py` |
-| 归属地查询重复计算 | 中心按 IP 去重缓存，月累计聚合后再按缓存主键关联 | `central/ipgeo.py`、`central/storage.py` |
+| 归属地查询重复计算 | 中心按 IP 去重缓存，月累计聚合后再按缓存主键关联，使用 DB-IP Lite MMDB 进行进程内查找 | `central/ipgeo.py`、`central/storage.py` |
 | 月累计每次实时计算开销较大 | 写入时由触发器更新月累计表，归档时保留累计值 | `central/monthbook.py` |
 | 上传开销较大 | 分批写入、限制队列长度、复用数据库连接 | `central/publish.py`、`central/edge_queue.py` |
 | 数据库规模持续增长 | 校验无误后归档并写入归档记录，无归档记录的数据无法删除 | `central/tiering.py`、`central/archive.py` |

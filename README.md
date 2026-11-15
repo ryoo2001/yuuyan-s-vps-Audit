@@ -108,7 +108,7 @@ python3 query.py summary --from 2026-11-01T00:00:00+08:00 --to 2026-11-12T00:00:
 | 入口机 | `audit.py`，`"mode": "edge"` | `deploy/traffic-audit-*-edge.service` | `captures`（抓包网卡与端口）、`endpoint`（落地机或中继地址）、`auth_file`（签名密钥） |
 | 落地机 | `audit.py`，`"mode": "terminal"` | `deploy/traffic-audit.service` | `listen`、`captures`、`peers`（所属入口机）、`inbound_ports`、`mihomo_config` |
 | 落地机 | `central/publish.py` | `central/traffic-audit-publish.service` | 私有文件 `writer.json`（中心地址与上传账号） |
-| 中心 | `central/archive.py`、`central/prune.py`、`central/ipgeo.py`、`central/backup.sh` | 对应的 `.timer` | 归档目录、归属地 xdb 缓存、数据库连接 |
+| 中心 | `central/archive.py`、`central/prune.py`、`central/ipgeo.py`、`central/backup.sh` | 对应的 `.timer` | 归档目录、DB-IP Lite MMDB 缓存、数据库连接 |
 
 入口机的配置示例如下（取自 `config/` 目录，地址已替换）：
 

@@ -15,14 +15,6 @@ def normalized(path):
 def build_command():
     files = [
         ("central/ipgeo.py", "/usr/local/libexec/traffic-central-storage/ipgeo.py"),
-        ("central/storage.py", "/usr/local/libexec/traffic-central-storage/storage.py"),
-        ("central/region.py", "/usr/local/libexec/traffic-central-storage/region.py"),
-        ("central/detail_view.py", "/usr/local/libexec/traffic-central-storage/detail_view.py"),
-        ("central/views.sql", "/usr/local/libexec/traffic-central-storage/views.sql"),
-        ("central/views.sql", "/usr/local/libexec/traffic-central/views.sql"),
-        ("central/query.py", "/usr/local/libexec/traffic-central/query.py"),
-        ("query.py", "/usr/local/libexec/traffic-central/source_query.py"),
-        ("presentation.py", "/usr/local/libexec/traffic-central/presentation.py"),
         ("central/traffic-central-geo.service", "/etc/systemd/system/traffic-central-geo.service"),
         ("central/traffic-central-geo.timer", "/etc/systemd/system/traffic-central-geo.timer"),
     ]
@@ -61,11 +53,12 @@ def build_command():
         "changed=1",
         "systemctl daemon-reload",
         "/usr/bin/python3 /usr/local/libexec/traffic-central-storage/ipgeo.py run",
-        "changed=2",
         "systemctl enable --now traffic-central-geo.timer",
         "systemctl is-enabled traffic-central-geo.timer",
         "systemctl is-active traffic-central-geo.timer",
+        "rm -f -- /var/lib/traffic-central/geo/ip2region_v4.xdb /var/lib/traffic-central/geo/ip2region_v6.xdb",
         "find /var/lib/traffic-central/geo -maxdepth 1 -type f -printf '%f %s bytes\\n' | sort",
+        "changed=2",
         "echo traffic-central-geo deployment completed",
     ])
     return "\n".join(lines) + "\n"

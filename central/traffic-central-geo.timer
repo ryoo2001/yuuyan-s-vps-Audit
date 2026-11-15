@@ -1,9 +1,9 @@
 [Unit]
-Description=Refresh center-side IP geolocation cache every ten minutes
+Description=Refresh center-side DB-IP Lite geolocation cache monthly
 
 [Timer]
 OnBootSec=2min
-OnUnitActiveSec=10min
+OnUnitActiveSec=1d
 RandomizedDelaySec=30s
 AccuracySec=30s
 Unit=traffic-central-geo.service
