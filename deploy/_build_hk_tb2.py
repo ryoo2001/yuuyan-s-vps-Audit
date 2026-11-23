@@ -38,7 +38,7 @@ lines += [
     "if ! grep -q '^external-controller: 127.0.0.1:9090$' /etc/mihomo/config.yaml; then cp -p /etc/mihomo/config.yaml /var/tmp/mihomo-config.audit-term-b2.before; sed -i '1iexternal-controller: 127.0.0.1:9090' /etc/mihomo/config.yaml; fi",
     "python3 - <<'PY2'\nfrom pathlib import Path\nimport secrets\np=Path('/etc/traffic-audit/term-b2-auth.toml')\nif not p.exists():\n p.write_text('[network_identity]\\nnetwork_secret = \\\"'+secrets.token_hex(32)+'\\\"\\n')\n p.chmod(0o600)\nPY2",
     "ssh-keygen -q -t ed25519 -N '' -f /etc/traffic-audit/central-term-b2/id_ed25519 </dev/null || true",
-    "printf '%s\\n' '[203.0.113.109]:39238 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEXAMPLEexampleEXAMPLEexampleEXAMPLEexampleEXA' > /etc/traffic-audit/central-term-b2/known_hosts",
+    "printf '%s\\n' '[203.0.113.110]:39238 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEXAMPLEexampleEXAMPLEexampleEXAMPLEexampleEXA' > /etc/traffic-audit/central-term-b2/known_hosts",
     "chmod 600 /etc/traffic-audit/central-term-b2/id_ed25519 /etc/traffic-audit/central-term-b2/id_ed25519.pub /etc/traffic-audit/central-term-b2/known_hosts",
     "python3 - /usr/local/libexec/traffic-audit/audit.py --check",
     "python3 - <<'PY3'\nfrom pathlib import Path\nfor p in Path('/usr/local/libexec/traffic-audit').rglob('*.py'): compile(p.read_text(),str(p),'exec')\nPY3",

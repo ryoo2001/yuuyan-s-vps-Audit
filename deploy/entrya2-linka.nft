@@ -1,0 +1,12 @@
+table ip entrya2_linka {
+  chain prerouting {
+    type nat hook prerouting priority dstnat; policy accept;
+    iifname "ens5" ip daddr 172.28.51.221 tcp dport 28600 counter dnat to 203.0.113.101:3386
+    iifname "ens5" ip daddr 172.28.51.221 udp dport 28600 counter dnat to 203.0.113.101:3386
+  }
+  chain postrouting {
+    type nat hook postrouting priority srcnat; policy accept;
+    oifname "ens5" ip daddr 203.0.113.101 tcp dport 3386 ct status dnat counter masquerade
+    oifname "ens5" ip daddr 203.0.113.101 udp dport 3386 ct status dnat counter masquerade
+  }
+}

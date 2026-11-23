@@ -17,7 +17,7 @@ DOC_FILES = (
     "docs/operations.md", "docs/validation.md", "docs/database-optimization.md",
     "deploy/README.md", "client/README.md",
 )
-PROBES = ("entry-a1", "entry-a3", "entry-a4")
+PROBES = ("entry-a1", "entry-a2", "entry-a3", "entry-a4")
 BASELINE_FILES = (
     "audit.py", "capture.py", "transport.py", "presentation.py", "query.py", "rates.py", "maintenance.py",
     "central/model.py", "central/publish.py", "central/receive.py", "central/query.py",
@@ -28,7 +28,7 @@ BASELINE_FILES = (
     "central/traffic-central-prune.timer", "central/test_mysql.py", "central/test_views.py",
     "config/term-a1.json", "config/term-a2.json", "config/term-b3.json", "config/entry-b1.json", *(f"config/{node}.json" for node in PROBES),
     "deploy/build.py", "deploy/call.mjs", "deploy/update.py", "deploy/central.py", "deploy/ipgeo.py", "deploy/rename_db.py",
-    "deploy/traffic-audit.service", "deploy/traffic-audit-hk.service",
+    "deploy/traffic-audit.service", "deploy/traffic-audit-jp28600.service", "deploy/entrya2-linka-forward.service", "deploy/entrya2-linka.nft", "deploy/traffic-audit-hk.service",
     "deploy/traffic-audit-hk-publish.service", "deploy/traffic-audit-hk-edge.service",
     "deploy/traffic-central-hk-prune.service",
     "deploy/traffic-central-hk-prune.timer", "deploy/traffic-central-hk-query.py", "tests/test_ipgeo.py",
@@ -62,7 +62,7 @@ CONTRACT = {
     "summary_time_basis": "beijing_month_start_to_latest_sample_date",
     "summary_time_format": "YYYY/MM/01–YYYY/MM/DD",
     "timezone": "Asia/Shanghai", "unit_base": 1000,
-    "mysql_target": "203.0.113.113:3306", "ssh_compression": False,
+    "mysql_target": "203.0.113.115:3306", "ssh_compression": False,
     "provider_mapping": {"peer": "172.30.3.3", "entry": "203.0.113.103", "only_unknown_node": True},
     "views": VIEWS,
 }
@@ -198,14 +198,16 @@ def check_project(root, baseline=False):
             require(cfg.get(key) == value, f"terminal config drift: {key}")
         require(set(cfg["peers"]) == set(PROBES), "probe membership drift")
         expected_routes = {
-            ("entry-a1", 3386, "203.0.113.114"), ("entry-a1", 3380, "203.0.113.114"),
-            ("entry-a1", 3390, "203.0.113.114"), ("entry-a3", 3310, "203.0.113.102"),
+            ("entry-a1", 3386, "203.0.113.116"), ("entry-a2", 3386, "203.0.113.111"),
+            ("entry-a1", 3380, "203.0.113.116"),
+            ("entry-a1", 3390, "203.0.113.116"), ("entry-a3", 3310, "203.0.113.102"),
             ("entry-a4", 35800, "203.0.113.100"),
         }
         require({(r["node"], r["inbound_port"], r["tunnel_ip"]) for r in cfg.get("entry_routes", [])}
                 == expected_routes, "terminal public entry display drift")
         expected_fingerprints = {
             ("entry-a1", 3386, 28600, "tcp"), ("entry-a1", 3386, 28600, "udp"),
+            ("entry-a2", 3386, 28600, "tcp"), ("entry-a2", 3386, 28600, "udp"),
             ("entry-a1", 3380, 3380, "tcp"),
             ("entry-a1", 3390, 3390, "udp"), ("entry-a3", 3310, 3990, "tcp"),
             ("entry-a3", 3310, 3990, "udp"), ("entry-a4", 35800, 35800, "tcp"),
@@ -230,7 +232,7 @@ def check_project(root, baseline=False):
         require({"node": "entry-b2", "inbound_port": 24443,
                  "entry_port": 443, "transport": "tcp"} in hk.get("fingerprint_routes", [])
                 and {"node": "entry-b2", "inbound_port": 24443,
-                     "tunnel_ip": "203.0.113.111"} in hk["entry_routes"],
+                     "tunnel_ip": "203.0.113.112"} in hk["entry_routes"],
                 "HK AnyTLS fingerprint route drift")
         hk_edge = read_json("config/entrya-hk-2101.json")
         new_hk_edge = read_json("config/entrya2-hk-2101.json")
@@ -244,8 +246,8 @@ def check_project(root, baseline=False):
                     ("entry-b1", 24864, 24864, "tcp"), ("entry-b2", 24864, 24864, "tcp")},
                 "Tb3 fingerprint route drift")
         for filename, node, endpoint, port, udp in (
-                ("entry-b1-tb3", "entry-b1", "http://203.0.113.115:19091", 24864, []),
-                ("entryb2-tb3", "entry-b2", "http://203.0.113.115:19091", 24864, [])):
+                ("entry-b1-tb3", "entry-b1", "http://203.0.113.117:19091", 24864, []),
+                ("entryb2-tb3", "entry-b2", "http://203.0.113.117:19091", 24864, [])):
             edge = read_json("config/" + filename + ".json")
             require(edge.get("node") == node and edge.get("endpoint") == endpoint,
                     "Tb3 edge identity/endpoint drift: " + node)
@@ -272,10 +274,10 @@ def check_project(root, baseline=False):
                      for r in termb4.get("fingerprint_routes", [])} == {
                         ("entry-a1", 2101, 2101, "tcp"), ("entry-a1", 2101, 2101, "udp"),
                         ("entry-a2", 2101, 2101, "tcp"), ("entry-a2", 2101, 2101, "udp")}
-                and {"node": "entry-a1", "inbound_port": 2101, "tunnel_ip": "203.0.113.114"}
+                and {"node": "entry-a1", "inbound_port": 2101, "tunnel_ip": "203.0.113.116"}
                     in termb4.get("entry_routes", []),
                 "term-b4 terminal route drift")
-        require({"node": "entry-a2", "inbound_port": 2101, "tunnel_ip": "203.0.113.110"}
+        require({"node": "entry-a2", "inbound_port": 2101, "tunnel_ip": "203.0.113.111"}
                 in termb4.get("entry_routes", []), "term-b4 new public entry drift")
         require(hk_edge["captures"][0]["udp_ports"] == [2101]
                 and 2101 in hk["captures"][0]["udp_ports"]
@@ -304,10 +306,11 @@ def check_project(root, baseline=False):
                 require(ports == set(peer[protocol]), f"edge/terminal port mismatch: {node} {protocol}")
             require(edge.get("upload_transport", "http") == peer.get("upload_transport", "http"), f"edge transport mismatch: {node}")
             endpoint = urlsplit(edge["endpoint"])
-            entry_ports = {"entry-a1": 3395, "entry-a4": 3396, "entry-a3": 3397}
+            entry_ports = {"entry-a1": 3395, "entry-a2": 3395, "entry-a4": 3396, "entry-a3": 3397}
             require(endpoint.hostname == "203.0.113.101" and endpoint.port == entry_ports[node],
                     f"edge endpoint mismatch: {node}")
-            require(edge["auth_file"] == "/etc/traffic-audit/identity.toml",
+            expected_auth = "/etc/traffic-audit/identity.toml"
+            require(edge["auth_file"] == expected_auth,
                     f"edge signing identity must survive tunnel retirement: {node}")
         mysql = text("central/mysql.cnf")
         require(bool(re.search(r"(?m)^bind-address\s*=\s*127\.0\.0\.1\s*$", mysql)), "MySQL must bind loopback")

@@ -132,6 +132,25 @@ class StoreTests(unittest.TestCase):
         self.s.sample([self.conn(up=130,down=280)],self.now+1.1)
         r=self.s.db.execute('select count(*),sum(upload_bytes),sum(download_bytes) from samples').fetchone()
         self.assertEqual(tuple(r),(1,130,280))
+    def test_exact_domain_excluded_from_sampling_and_visits(self):
+        self.ingest('terminal', 'terminal', self.event(coverage='syn'))
+        sites = ['www.gstatic.com', 'WWW.GSTATIC.COM.', 'fonts.gstatic.com',
+                 'sub.www.gstatic.com', 'www.gstatic.com.example']
+        connections = []
+        for site in sites:
+            connection = self.conn(id=site)
+            connection['metadata']['host'] = site
+            connections.append(connection)
+            self.assertEqual(self.s.visit(f'[TCP] 10.0.0.2:1234 --> {site}:443 using DIRECT',
+                                          self.now + 1), site in sites[2:])
+        counts = self.s.sample(connections, self.now + 1)
+        self.assertEqual(counts['active_connections'], 3)
+        for table in ('samples', 'visits', 'connection_state'):
+            self.assertCountEqual([r[0] for r in self.s.db.execute(f'SELECT site FROM {table}')],
+                                  sites[2:])
+        self.assertCountEqual([r[0] for r in self.s.db.execute('SELECT connection_id FROM connection_rates')],
+                              sites[2:])
+
     def test_invalid_event(self):
         e=self.event('fingerprint',fingerprint='raw-payload')
         with self.assertRaises(ValueError):validate_event(e)
@@ -140,5 +159,155 @@ class StoreTests(unittest.TestCase):
         self.assertTrue(self.s.visit('[TCP] 10.0.0.2:1234 --> example.com:443 using DIRECT',self.now+1))
         self.assertFalse(self.s.visit('a secret unrelated log',self.now+1))
         self.assertEqual(self.s.db.execute('select site from visits').fetchone()[0],'example.com')
+
+    def test_trusted_controller_source_uses_real_client_and_chain_egress(self):
+        self.s.db.close()
+        self.cfg.update({
+            'inbound_types': {'3320': ['AnyTLS']},
+            'controller_source_ip': {'3320': {
+                'types': ['AnyTLS'],
+                'egress_by_chain': {'DIRECT': 'term-d', 'egress-d-socks5': 'egress-d'},
+                'default_egress': 'term-d',
+                'trust_unmatched_logs': True,
+            }},
+        })
+        self.s = Store(self.cfg)
+        c = self.conn()
+        c['metadata'].update(type='AnyTLS', sourceIP='8.8.8.8', chains=['egress-d-socks5'])
+        self.s.sample([c], self.now + 1)
+        row = self.s.db.execute('SELECT source_ip,node,quality FROM connection_state').fetchone()
+        self.assertEqual(tuple(row), ('8.8.8.8', 'egress-d', 'controller_source_ip'))
+        self.assertTrue(self.s.visit(
+            '[TCP] 8.8.8.8:1234 --> chat.openai.com:443 match Match using egress-d-socks5', self.now + 1))
+        row = self.s.db.execute('SELECT source_ip,node,quality FROM visits').fetchone()
+        self.assertEqual(tuple(row), ('8.8.8.8', 'egress-d', 'controller_source_ip'))
+
+    def controller_store(self):
+        self.s.db.close()
+        self.cfg.update({
+            'inbound_types': {'3320': ['AnyTLS']},
+            'controller_source_ip': {'3320': {
+                'types': ['AnyTLS'],
+                'egress_by_chain': {'DIRECT': 'term-d', 'egress-d-socks5': 'egress-d'},
+                'default_egress': 'term-d',
+                'trust_unmatched_logs': True,
+            }},
+        })
+        self.s = Store(self.cfg)
+
+    def test_log_outbound_name_ignores_rule_names(self):
+        from audit import log_outbound_name
+        self.assertEqual(log_outbound_name('[TCP] 8.8.8.8:1 --> x.com:443 match Match using DIRECT'), 'DIRECT')
+        self.assertEqual(log_outbound_name('[TCP] 8.8.8.8:1 --> x.com:443 match DomainSuffix(openai.com) using egress-d-socks5'), 'egress-d-socks5')
+        self.assertEqual(log_outbound_name('[TCP] 8.8.8.8:1 --> x.com:443 using egress-d-socks5'), 'egress-d-socks5')
+        self.assertIsNone(log_outbound_name('[TCP] 8.8.8.8:1 --> x.com:443 match Match'))
+
+    def test_visit_with_matched_flow_uses_chain_egress_not_flow_node(self):
+        self.controller_store()
+        self.ingest('terminal', 'terminal', self.event(source='8.8.8.8', coverage='syn'))
+        self.assertTrue(self.s.visit(
+            '[TCP] 8.8.8.8:1234 --> chat.openai.com:443 match Match using egress-d-socks5', self.now + 1))
+        row = self.s.db.execute('SELECT source_ip,node,quality,flow_id FROM visits').fetchone()
+        self.assertEqual(tuple(row[:3]), ('8.8.8.8', 'egress-d', 'controller_source_ip'))
+        self.assertIsNotNone(row[3])
+
+    def test_unmatched_log_egress_uses_outbound_not_rule_name(self):
+        self.controller_store()
+        self.assertTrue(self.s.visit(
+            '[TCP] 8.8.8.8:1234 --> x.com:443 match DomainSuffix(x.com) using egress-d-socks5', self.now + 1))
+        self.assertTrue(self.s.visit(
+            '[TCP] 9.9.9.9:1234 --> x.com:443 match Match using DIRECT', self.now + 1))
+        rows = dict(tuple(r) for r in self.s.db.execute('SELECT source_ip,node FROM visits').fetchall())
+        self.assertEqual(rows, {'8.8.8.8': 'egress-d', '9.9.9.9': 'term-d'})
+
+    def anytls(self, source='8.8.8.8', chains=None, id='one'):
+        c = self.conn(id=id)
+        c['metadata'].update(type='AnyTLS', sourceIP=source)
+        if chains is not None:
+            c['chains'] = chains
+        return c
+
+    def test_unmapped_chain_is_not_defaulted_and_is_reported(self):
+        self.controller_store()
+        self.s.sample([self.anytls(chains=['us-new-socks5', 'Proxy'])], self.now + 1)
+        row = self.s.db.execute('SELECT source_ip,node,quality FROM connection_state').fetchone()
+        self.assertEqual(tuple(row), ('8.8.8.8', None, 'controller_source_ip'))
+        self.assertEqual(self.s.unmapped_routes, {'us-new-socks5'})
+        self.assertTrue(self.s.visit('[TCP] 9.9.9.9:1 --> x.com:443 match Match using us-new-socks5', self.now + 1))
+        self.assertIsNone(self.s.db.execute("SELECT node FROM visits WHERE source_ip='9.9.9.9'").fetchone()[0])
+
+    def test_rejected_connection_has_no_egress_and_no_warning(self):
+        self.controller_store()
+        self.s.sample([self.anytls(chains=['REJECT'])], self.now + 1)
+        self.assertTrue(self.s.visit('[TCP] 9.9.9.9:1 --> x.com:22 match DstPort(22) using REJECT', self.now + 1))
+        self.assertIsNone(self.s.db.execute('SELECT node FROM connection_state').fetchone()[0])
+        self.assertIsNone(self.s.db.execute('SELECT node FROM visits').fetchone()[0])
+        self.assertEqual(self.s.unmapped_routes, set())
+
+    def test_no_reported_route_uses_default_egress_and_group_member_maps(self):
+        self.controller_store()
+        self.s.sample([self.anytls(chains=[])], self.now + 1)
+        self.assertEqual(self.s.db.execute('SELECT node FROM connection_state').fetchone()[0], 'term-d')
+        self.assertTrue(self.s.visit('[TCP] 9.9.9.9:1 --> x.com:443 match Match using Proxy[egress-d-socks5]', self.now + 1))
+        self.assertEqual(self.s.db.execute('SELECT node FROM visits').fetchone()[0], 'egress-d')
+        self.assertEqual(self.s.unmapped_routes, set())
+
+    def test_existing_conflicting_fingerprint_hides_both_sources(self):
+        self.controller_store()
+        self.ingest('terminal', 'terminal', self.event(source='8.8.8.8', coverage='syn'))
+        self.ingest('terminal', 'terminal', self.event('fingerprint', source='8.8.8.8', fingerprint='c' * 64))
+        self.ingest('edge', 'edge', self.event('fingerprint', source='1.1.1.1', fid='e', fingerprint='c' * 64))
+        c = self.anytls(chains=['DIRECT'])
+        for step in (1, 2, 3):
+            self.s.sample([c], self.now + step)
+        self.assertEqual(tuple(self.s.db.execute('SELECT source_ip,node,quality FROM connection_state').fetchone()),
+                         (None, 'term-d', 'source_conflict'))
+        self.assertEqual(self.s.source_conflicts, 1)
+
+    def test_private_controller_peer_keeps_fingerprint_evidence(self):
+        self.controller_store()
+        self.ingest('terminal', 'terminal', self.event(coverage='syn'))
+        self.ingest('terminal', 'terminal', self.event('fingerprint', fingerprint='b' * 64))
+        self.ingest('edge', 'edge', self.event('fingerprint', source='1.1.1.1', fid='e', fingerprint='b' * 64))
+        self.s.sample([self.anytls(source='10.0.0.2', chains=['DIRECT'])], self.now + 1)
+        self.assertEqual(tuple(self.s.db.execute('SELECT source_ip,node,quality FROM connection_state').fetchone()),
+                         ('1.1.1.1', 'edge', 'ciphertext_fingerprint'))
+
+    def test_late_agreeing_fingerprint_keeps_chain_egress(self):
+        self.controller_store()
+        self.ingest('terminal', 'terminal', self.event(source='8.8.8.8', coverage='syn'))
+        self.ingest('terminal', 'terminal', self.event('fingerprint', source='8.8.8.8', fingerprint='e' * 64))
+        self.s.sample([self.anytls(chains=['egress-d-socks5'])], self.now + 1)
+        self.s.visit('[TCP] 8.8.8.8:1234 --> x.com:443 match Match using egress-d-socks5', self.now + 1)
+        self.ingest('edge', 'edge', self.event('fingerprint', source='8.8.8.8', fid='e', fingerprint='e' * 64))
+        for table in ('connection_state', 'visits', 'samples'):
+            self.assertEqual(tuple(self.s.db.execute('SELECT source_ip,node,quality FROM ' + table).fetchone()),
+                             ('8.8.8.8', 'egress-d', 'controller_source_ip'), table)
+
+    def test_late_disagreeing_fingerprint_marks_conflict(self):
+        self.controller_store()
+        self.ingest('terminal', 'terminal', self.event(source='8.8.8.8', coverage='syn'))
+        self.ingest('terminal', 'terminal', self.event('fingerprint', source='8.8.8.8', fingerprint='f' * 64))
+        c = self.anytls(chains=['egress-d-socks5'])
+        self.s.sample([c], self.now + 1)
+        self.s.visit('[TCP] 8.8.8.8:1234 --> x.com:443 match Match using egress-d-socks5', self.now + 1)
+        self.ingest('edge', 'edge', self.event('fingerprint', source='1.1.1.1', fid='e', fingerprint='f' * 64))
+        for table in ('connection_state', 'visits', 'samples'):
+            self.assertEqual(tuple(self.s.db.execute('SELECT source_ip,node,quality FROM ' + table).fetchone()),
+                             (None, 'egress-d', 'source_conflict'), table)
+        self.s.sample([c], self.now + 2)
+        self.s.sample([c], self.now + 3)
+        self.assertEqual(tuple(self.s.db.execute('SELECT source_ip,quality FROM connection_state').fetchone()),
+                         (None, 'source_conflict'))
+        self.assertEqual(self.s.source_conflicts, 1)
+
+    def test_controller_source_rejects_non_global_addresses(self):
+        self.controller_store()
+        for peer in ('127.0.0.1', '10.0.0.2', '192.168.1.5', '169.254.1.1', '203.0.113.108', '198.18.0.5'):
+            self.assertIsNone(self.s.trusted_controller_source(peer, 3320, 'AnyTLS'), peer)
+            self.assertFalse(self.s.visit(
+                '[TCP] %s:1234 --> x.com:443 match Match using DIRECT' % peer, self.now + 1), peer)
+        self.assertEqual(self.s.trusted_controller_source('8.8.8.8', 3320, 'AnyTLS'), '8.8.8.8')
+        self.assertIsNone(self.s.trusted_controller_source('8.8.8.8', 3320, 'Mieru'))
 
 if __name__=='__main__':unittest.main()

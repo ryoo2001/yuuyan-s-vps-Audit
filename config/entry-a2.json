@@ -1,0 +1,13 @@
+{
+  "db": "/var/lib/traffic-audit/jp28600.sqlite",
+  "health": "/var/lib/traffic-audit/jp28600-health.json",
+  "retention_days": 7,
+  "spool_hours": 24,
+  "mode": "edge",
+  "node": "entry-a2",
+  "max_db_mb": 128,
+  "captures": [{"interface": "ens5", "front_address": "172.28.51.221", "tcp_ports": [28600], "udp_ports": [28600]}],
+  "endpoint": "http://203.0.113.101:3395",
+  "auth_file": "/etc/traffic-audit/identity.toml",
+  "upload_transport": "http"
+}

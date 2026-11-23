@@ -6,7 +6,7 @@
   "node": "term-a1",
   "max_db_mb": 2048,
   "listen": [
-    "203.0.113.113"
+    "203.0.113.115"
   ],
   "sample_interval": 0.5,
   "mihomo_config": "/etc/mihomo/config.yaml",
@@ -58,6 +58,11 @@
         28600
       ]
     },
+    "entry-a2": {
+      "auth_file": "/etc/traffic-audit/peers/easytier-net-a.toml",
+      "tcp_ports": [28600],
+      "udp_ports": [28600]
+    },
     "entry-a3": {
       "auth_file": "/etc/traffic-audit/peers/easytier-udp3990.toml",
       "tcp_ports": [
@@ -84,17 +89,22 @@
     {
       "node": "entry-a1",
       "inbound_port": 3386,
-      "tunnel_ip": "203.0.113.114"
+      "tunnel_ip": "203.0.113.116"
     },
     {
       "node": "entry-a1",
       "inbound_port": 3380,
-      "tunnel_ip": "203.0.113.114"
+      "tunnel_ip": "203.0.113.116"
     },
     {
       "node": "entry-a1",
       "inbound_port": 3390,
-      "tunnel_ip": "203.0.113.114"
+      "tunnel_ip": "203.0.113.116"
+    },
+    {
+      "node": "entry-a2",
+      "inbound_port": 3386,
+      "tunnel_ip": "203.0.113.111"
     },
     {
       "node": "entry-a3",
@@ -112,6 +122,12 @@
   "fingerprint_routes": [
     {
       "node": "entry-a1",
+      "inbound_port": 3386,
+      "entry_port": 28600,
+      "transport": "tcp"
+    },
+    {
+      "node": "entry-a2",
       "inbound_port": 3386,
       "entry_port": 28600,
       "transport": "tcp"
@@ -148,6 +164,12 @@
     },
     {
       "node": "entry-a1",
+      "inbound_port": 3386,
+      "entry_port": 28600,
+      "transport": "udp"
+    },
+    {
+      "node": "entry-a2",
       "inbound_port": 3386,
       "entry_port": 28600,
       "transport": "udp"

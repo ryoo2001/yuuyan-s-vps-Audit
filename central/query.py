@@ -16,7 +16,7 @@ CENTRAL_NODE = os.environ.get('TRAFFIC_CENTRAL_NODE', 'legacy-center')
 PUBLISHERS = tuple(x for x in os.environ.get(
     'TRAFFIC_CENTRAL_PUBLISHERS', os.environ.get('TRAFFIC_CENTRAL_PUBLISHER', 'term-a1')).split(',') if x)
 ACTIVE_EDGE_NODES = tuple(x for x in os.environ.get(
-    'TRAFFIC_CENTRAL_ACTIVE_EDGE_NODES', 'entry-a1,entry-a3,entry-a4').split(',') if x)
+    'TRAFFIC_CENTRAL_ACTIVE_EDGE_NODES', 'entry-a1,entry-a2,entry-a3,entry-a4').split(',') if x)
 
 DETAIL_BATCH_SIZE = 500
 # Retired publishers keep their sync_state history but must not hide new faults

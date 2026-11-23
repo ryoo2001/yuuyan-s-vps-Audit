@@ -15,7 +15,7 @@
       "front_address": "172.29.17.195"
     }
   ],
-  "endpoint": "http://203.0.113.115:19091",
+  "endpoint": "http://203.0.113.117:19091",
   "auth_file": "/etc/traffic-audit/hk-edge-auth.toml",
   "upload_transport": "http",
   "spool_hours": 24

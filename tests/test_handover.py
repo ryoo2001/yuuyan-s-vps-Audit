@@ -44,6 +44,7 @@ class HandoverTests(unittest.TestCase):
             "docs/database-optimization.md", "deploy/hk-l4-24864.manifest.json", "deploy/entrya2.manifest.json",
             "deploy/stream.manifest.json", "deploy/hk-unknown-fix.manifest.json", "deploy/optimize.manifest.json",
             "central/detail_view.py",
+            "docs/socks5中转统计.md", "config/term-d.json", "central/us_views.py",
         )
         for name in (*check.REQUIRED_FILES, *public_link_targets):
             if not (ROOT / name).is_file():
@@ -86,7 +87,7 @@ class HandoverTests(unittest.TestCase):
         self.expect_error("JP SS2022 protocol drift")
 
     def test_termb4_edge_cannot_upload_to_retired_terminal(self):
-        self.edit("config/entrya-hk-2101.json", "http://127.0.0.1:19091", "http://203.0.113.115:19091")
+        self.edit("config/entrya-hk-2101.json", "http://127.0.0.1:19091", "http://203.0.113.117:19091")
         self.expect_error("term-b4 edge identity/endpoint drift: entry-a1")
 
     def test_tb3_peer_and_fingerprint_must_match_new_carrier(self):
@@ -206,7 +207,7 @@ class HandoverTests(unittest.TestCase):
         self.expect_error("retired edge config must be absent")
 
     def test_retired_edge_health_membership_rejected(self):
-        self.edit("central/query.py", "entry-a1,entry-a3,entry-a4", "entry-a1,entry-a0,entry-a3")
+        self.edit("central/query.py", "entry-a1,entry-a2,entry-a3,entry-a4", "entry-a1,entry-a0,entry-a3")
         self.expect_error("central active edge membership drift")
 
     def test_unused_udp_receiver_rejected(self):

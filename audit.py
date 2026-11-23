@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import hmac
+import http.client
 import http.server
 import ipaddress
 import json
@@ -86,9 +87,42 @@ def inbound_types(config):
     for port, names in config.get("inbound_types", {}).items():
         if str(int(port)) != port or int(port) not in result:
             raise ValueError("unverified inbound type port")
-        if not isinstance(names, list) or not names or any(n not in ("Mieru", "ShadowSocks", "AnyTLS") for n in names):
+        if not isinstance(names, list) or not names or any(n not in ("Mieru", "ShadowSocks", "AnyTLS", "Socks5") for n in names):
             raise ValueError("unsupported inbound type")
         result[int(port)] = frozenset(names)
+    return result
+
+
+def controller_source_rules(config):
+    """Validate controller source identities explicitly trusted for an inbound."""
+    result = {}
+    for port, rule in config.get("controller_source_ip", {}).items():
+        if str(int(port)) != str(port) or int(port) not in config.get("inbound_ports", []):
+            raise ValueError("unverified controller source port")
+        if not isinstance(rule, dict):
+            raise ValueError("invalid controller source rule")
+        names = rule.get("types")
+        if not isinstance(names, list) or not names or any(
+                not isinstance(name, str) or name not in inbound_types(config)[int(port)]
+                for name in names):
+            raise ValueError("invalid controller source types")
+        routes = rule.get("egress_by_chain", {})
+        if not isinstance(routes, dict) or any(
+                not isinstance(chain, str) or not chain or not isinstance(node, str) or not node
+                for chain, node in routes.items()):
+            raise ValueError("invalid controller egress routes")
+        default = rule.get("default_egress", "")
+        if not isinstance(default, str):
+            raise ValueError("invalid controller default egress")
+        trust_logs = rule.get("trust_unmatched_logs", False)
+        if not isinstance(trust_logs, bool):
+            raise ValueError("invalid controller log trust")
+        result[int(port)] = {
+            "types": frozenset(names),
+            "egress_by_chain": routes,
+            "default_egress": default,
+            "trust_unmatched_logs": trust_logs,
+        }
     return result
 
 
@@ -165,6 +199,23 @@ def udp_batch(node, key, data):
             data["events"] = data["events"][:max(1, len(data["events"]) // 2)]
 
 
+EXCLUDED_SITES = frozenset({"www.gstatic.com"})
+# Mihomo built-in outbounds that drop the connection instead of forwarding it.
+REJECT_OUTBOUNDS = frozenset({"REJECT", "REJECT-DROP"})
+
+
+def log_outbound_name(payload):
+    '''Return the outbound written after 'using' in a Mihomo log line.
+
+    Text after 'match' is the rule name and never identifies the egress.
+    '''
+    marker = payload.rfind(" using ")
+    if marker < 0:
+        return None
+    parts = payload[marker + 7:].split(None, 1)
+    return parts[0][:128] if parts else None
+
+
 class Store:
     def __init__(self, config):
         self.config = config
@@ -172,6 +223,7 @@ class Store:
         self.mode = config["mode"]
         self.ingress_routes = exclusive_ingress_routes(config)
         self.inbound_types = inbound_types(config)
+        self.controller_source_rules = controller_source_rules(config)
         self.fingerprint_routes = fingerprint_routes(config)
         self.lock = threading.RLock()
         self.source_rates = SourceRates()
@@ -182,6 +234,9 @@ class Store:
         self.flow_versions = {}
         self.sample_stats = {"sampler_polls": 0, "sampler_state_writes": 0,
                              "sampler_rate_writes": 0, "sampler_flow_queries": 0}
+        # Route names reported by the controller without an egress mapping.
+        self.unmapped_routes = set()
+        self.source_conflicts = 0
         path = Path(config["db"])
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.db = sqlite3.connect(path, check_same_thread=False, timeout=5)
@@ -364,6 +419,84 @@ class Store:
             return route[0]
         return None
 
+    def controller_egress_node(self, port, connection=None, route_name=None):
+        '''Map controller chains or a log outbound to an egress node.
+
+        default_egress applies only when the controller reports no route at
+        all. A reported but unmapped route returns None and is counted, so a
+        new upstream never silently becomes the default machine.
+        '''
+        rule = self.controller_source_rules.get(port)
+        if not rule:
+            return None
+        connection = connection or {}
+        chains = connection.get("chains", [])
+        if not chains and isinstance(connection.get("metadata"), dict):
+            chains = connection["metadata"].get("chains", [])
+        names = [c for c in chains if isinstance(c, str) and c] if isinstance(chains, list) else []
+        if not names and route_name:
+            # Log lines may print a group with its selected member: Group[Node].
+            names = [route_name]
+            member = re.fullmatch(r"[^\[\]]+\[([^\[\]]+)\]", route_name)
+            if member:
+                names.insert(0, member.group(1))
+        for name in names:
+            node = rule["egress_by_chain"].get(name)
+            if node:
+                return node
+        if names and names[0] in REJECT_OUTBOUNDS:
+            # Blocked by a Mihomo rule: there is no egress machine and nothing to map.
+            return None
+        if names:
+            if len(self.unmapped_routes) < 32:
+                self.unmapped_routes.add(names[0][:64])
+            return None
+        return rule["default_egress"] or None
+
+    def trusted_controller_source(self, peer, port, connection_type):
+        rule = self.controller_source_rules.get(port)
+        if not rule or connection_type not in rule["types"]:
+            return None
+        try:
+            address = ipaddress.ip_address(peer)
+        except ValueError:
+            return None
+        # Only globally routable unicast addresses can be real clients. Loopback,
+        # private, link-local, multicast and documentation ranges never are.
+        if not address.is_global or address.is_multicast or is_fake_source_ip(str(address)):
+            return None
+        return str(address)
+
+    def flow_evidence(self, flow_id):
+        '''Return (source_ip, quality) recorded on a terminal flow by correlation.'''
+        if not flow_id:
+            return None, None
+        row = self.db.execute("SELECT source_ip,quality FROM flows WHERE flow_id=?", (flow_id,)).fetchone()
+        return (row["source_ip"], row["quality"]) if row else (None, None)
+
+    def resolve_controller_source(self, controller_ip, evidence_ip, evidence_quality, egress, count=True):
+        '''Combine the controller source with any ciphertext evidence.
+
+        Agreement or missing evidence keeps the controller identity. A different
+        fingerprint source means the inbound is not a direct client path (for
+        example a SNAT front was added), so neither address is published.
+        '''
+        if (evidence_ip and evidence_quality == "ciphertext_fingerprint"
+                and evidence_ip != controller_ip):
+            if count:
+                self.source_conflicts += 1
+            return None, egress, "source_conflict"
+        return controller_ip, egress, "controller_source_ip"
+
+    def trusted_log_source(self, peer, route_name):
+        for port, rule in self.controller_source_rules.items():
+            if not rule["trust_unmatched_logs"]:
+                continue
+            source = self.trusted_controller_source(peer, port, next(iter(rule["types"])))
+            if source is not None:
+                return source, self.controller_egress_node(port, route_name=route_name)
+        return None
+
     def correlate(self, digest, transport):
         terminals = self.db.execute("SELECT * FROM fingerprints WHERE kind='terminal' AND fingerprint=? AND transport=?", (digest, transport)).fetchall()
         for term in terminals:
@@ -399,10 +532,22 @@ class Store:
             self.db.execute("UPDATE flows SET source_ip=?,source_node=?,quality=? WHERE flow_id=?", (source_ip, node, quality, term["flow_id"]))
             socket_key = (term["src_ip"], term["src_port"], term["dst_port"])
             self.flow_versions[socket_key] = self.flow_versions.get(socket_key, 0) + 1
-            self.db.execute("UPDATE connection_state SET source_ip=?,node=?,quality=? WHERE flow_id=?", (source_ip, node, quality, term["flow_id"]))
-            self.db.execute("UPDATE visits SET source_ip=?,node=?,quality=? WHERE flow_id=?", (source_ip, node, quality, term["flow_id"]))
-            self.db.execute("""UPDATE samples SET source_ip=?,node=?,quality=? WHERE connection_id IN
-              (SELECT connection_id FROM connection_state WHERE flow_id=?)""", (source_ip, node, quality, term["flow_id"]))
+            if term["dst_port"] in self.controller_source_rules:
+                # Rows on a controller-source inbound keep the controller identity and
+                # chain egress. Late evidence only marks rows whose source disagrees.
+                if quality == "ciphertext_fingerprint" and source_ip:
+                    conflict = ("UPDATE {} SET source_ip=NULL,quality='source_conflict' "
+                                "WHERE {} AND quality='controller_source_ip' AND source_ip<>?")
+                    marked = self.db.execute(conflict.format("connection_state", "flow_id=?"), (term["flow_id"], source_ip)).rowcount
+                    self.source_conflicts += marked
+                    self.db.execute(conflict.format("visits", "flow_id=?"), (term["flow_id"], source_ip))
+                    self.db.execute(conflict.format("samples", "connection_id IN (SELECT connection_id FROM connection_state WHERE flow_id=?)"),
+                                    (term["flow_id"], source_ip))
+            else:
+                self.db.execute("UPDATE connection_state SET source_ip=?,node=?,quality=? WHERE flow_id=?", (source_ip, node, quality, term["flow_id"]))
+                self.db.execute("UPDATE visits SET source_ip=?,node=?,quality=? WHERE flow_id=?", (source_ip, node, quality, term["flow_id"]))
+                self.db.execute("""UPDATE samples SET source_ip=?,node=?,quality=? WHERE connection_id IN
+                  (SELECT connection_id FROM connection_state WHERE flow_id=?)""", (source_ip, node, quality, term["flow_id"]))
             for cid in self.flow_clients.get(term["flow_id"], ()):
                 self.state_cache.pop(cid, None)
                 self.rate_cache.pop(cid, None)
@@ -412,20 +557,37 @@ class Store:
         if not match:
             return False
         network, peer, port, site, destination_port = match.groups()
+        route_name = log_outbound_name(payload)
+        port = int(port)  # client source port; the inbound port comes from the matched flow
+        site = site.lower().rstrip(".")[:253]
+        if site in EXCLUDED_SITES:
+            return False
         with self.lock, self.db:
             flows = self.db.execute("""SELECT * FROM flows WHERE kind='terminal' AND src_ip=? AND src_port=?
               AND start_ts<=? AND (end_ts IS NULL OR end_ts>=?) ORDER BY start_ts DESC LIMIT 2""",
-              (peer, int(port), now+2, now-2)).fetchall()
+              (peer, port, now+2, now-2)).fetchall()
             if len(flows) == 1:
                 f = flows[0]
                 fid, source, node, quality = f['flow_id'], f['source_ip'], f['source_node'], f['quality']
                 ingress = self.ingress_node(f["src_ip"], f["dst_port"])
                 if ingress and node != ingress:
                     source, node, quality = None, ingress, "exclusive_ingress"
+                inbound = f["dst_port"]
+                rule = self.controller_source_rules.get(inbound)
+                if rule:
+                    trusted_source = self.trusted_controller_source(peer, inbound, next(iter(rule["types"])))
+                    if trusted_source is not None:
+                        source, node, quality = self.resolve_controller_source(
+                            trusted_source, f["source_ip"], f["quality"],
+                            self.controller_egress_node(inbound, route_name=route_name), count=False)
             else:
-                return False
+                trusted_log = self.trusted_log_source(peer, route_name)
+                if trusted_log is None:
+                    return False
+                source, node = trusted_log
+                fid, quality = None, "controller_source_ip"
             self.db.execute('INSERT INTO visits VALUES(?,?,?,?,?,?,?,?,?)', (
-                str(uuid.uuid4()), now, node, source, site.lower().rstrip('.')[:253], int(destination_port), network.lower(), fid, quality))
+                str(uuid.uuid4()), now, node, source, site, int(destination_port), network.lower(), fid, quality))
         self.cache_revision = self.db.total_changes
         return True
 
@@ -462,6 +624,9 @@ class Store:
                         started = epoch(c["start"])
                         peer, source_port = m.get("sourceIP", ""), int(m.get("sourcePort") or 0)
                         site = (m.get("host") or m.get("destinationIP") or "unknown").lower().rstrip(".")[:253]
+                        if site in EXCLUDED_SITES:
+                            continue
+                        trusted_source = self.trusted_controller_source(peer, port, m.get("type"))
                         cached = cid in self.state_cache
                         old = self.state_cache.get(cid)
                         if not cached:
@@ -517,6 +682,13 @@ class Store:
                             source_ip, node, quality = None, ingress, "exclusive_ingress"
                         elif not ingress and quality == "exclusive_ingress":
                             source_ip, node, quality = None, None, "unresolved"
+                        if trusted_source is not None:
+                            # Judge conflicts on the flow's own fingerprint evidence,
+                            # not on values this method wrote in an earlier poll.
+                            evidence = self.flow_evidence(fid)
+                            source_ip, node, quality = self.resolve_controller_source(
+                                trusted_source, evidence[0], evidence[1], self.controller_egress_node(port, c),
+                                count=not old or old["quality"] != "source_conflict")
                         values = (cid, started, now, peer, source_port, port, site, up, down,
                                   fid, source_ip, node, quality)
                         rate_rows.append((cid, source_ip, up, down, started))
@@ -889,12 +1061,18 @@ class Audit:
             STOP.wait(0.5)
 
     def poll_mihomo(self):
+        connection = None
         while not STOP.is_set():
             started = time.monotonic()
             try:
                 url, secret = self.controller_access()
-                req = urllib.request.Request(url, headers={"Authorization": "Bearer " + secret})
-                with self.proxyless.open(req, timeout=3) as response:
+                if connection is None:
+                    endpoint = urllib.parse.urlsplit(url)
+                    connection = http.client.HTTPConnection(endpoint.hostname, endpoint.port, timeout=3)
+                connection.request("GET", endpoint.path, headers={"Authorization": "Bearer " + secret})
+                with connection.getresponse() as response:
+                    if response.status != 200:
+                        raise ValueError("controller HTTP status %d" % response.status)
                     data = json.load(response)
                 if not isinstance(data, dict) or "connections" not in data or not isinstance(data["connections"], (list, type(None))):
                     raise ValueError("invalid controller snapshot")
@@ -904,10 +1082,15 @@ class Audit:
                 self.metrics["mihomo_download_total"] = data.get("downloadTotal")
                 self.errors.pop("mihomo", None)
             except Exception as exc:
+                if connection is not None:
+                    connection.close()
+                    connection = None
                 self.errors["mihomo"] = type(exc).__name__
             elapsed = time.monotonic() - started
             self.metrics["last_sample_duration_ms"] = round(elapsed * 1000, 3)
             STOP.wait(max(0.01, self.config.get("sample_interval", 0.5)-elapsed))
+        if connection is not None:
+            connection.close()
 
     def health(self):
         now = time.time()
@@ -926,6 +1109,13 @@ class Audit:
                     self.last_database_stats = now
                 self.metrics['database_stats_at'] = self.last_database_stats
                 self.metrics.update(self.store.sample_stats)
+                if self.store.controller_source_rules:
+                    self.metrics["unmapped_egress_routes"] = sorted(self.store.unmapped_routes)
+                    self.metrics["controller_source_conflicts"] = self.store.source_conflicts
+                    if self.store.unmapped_routes:
+                        warnings.append("unmapped_egress_route")
+                    if self.store.source_conflicts:
+                        warnings.append("controller_source_conflict")
                 self.metrics['state_heartbeat_seconds'] = STATE_HEARTBEAT_SECONDS
                 peers = {r["node"]: dict(r) for r in self.store.db.execute("SELECT * FROM peers")}
                 for peer in peers.values():

@@ -40,7 +40,7 @@
   "listen": [
     "10.77.64.2",
     "10.77.65.2",
-    "203.0.113.115"
+    "203.0.113.117"
   ],
   "udp_listen": [],
   "peers": {
@@ -63,12 +63,12 @@
     {
       "node": "entry-b2",
       "inbound_port": 24864,
-      "tunnel_ip": "203.0.113.111"
+      "tunnel_ip": "203.0.113.112"
     },
     {
       "node": "entry-b1",
       "inbound_port": 24864,
-      "tunnel_ip": "203.0.113.112"
+      "tunnel_ip": "203.0.113.113"
     }
   ],
   "fingerprint_routes": [

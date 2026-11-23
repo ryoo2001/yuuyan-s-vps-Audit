@@ -18,7 +18,7 @@
       ]
     }
   ],
-  "endpoint": "http://203.0.113.108:19091",
+  "endpoint": "http://203.0.113.109:19091",
   "auth_file": "/etc/traffic-audit/edge39170-auth.toml",
   "upload_transport": "http"
 }

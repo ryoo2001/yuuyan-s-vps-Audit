@@ -19,7 +19,7 @@ import sys
 import time
 import unicodedata
 
-from presentation import COLUMNS as DETAIL_COLUMNS
+from presentation import COLUMNS as DETAIL_COLUMNS, view_columns
 
 
 CONFIG_PATH = "/etc/traffic-audit/config.json"
@@ -388,11 +388,12 @@ def summary(config, args, now):
     if not visits_available:
         warnings.append("visits 表不存在，仅返回采样统计；request_events=0 表示未提供日志观测数据，不代表没有访问。")
     payload = base_payload(config, now)
+    summary_columns = view_columns(config)[1]
     payload.update(
         window={"from": args.start.isoformat().replace("+00:00", "Z"), "to": args.end.isoformat().replace("+00:00", "Z")},
         group_by=args.group_by, byte_basis=BYTE_BASIS, rows=rows, totals=totals,
         groups_total=groups_total, truncated=groups_total > args.limit, warnings=warnings,
-        summary_view={"name": "流量汇总", "columns": list(SUMMARY_VIEW_COLUMNS),
+        summary_view={"name": "流量汇总", "columns": list(summary_columns),
                       "scope": SUMMARY_VIEW_SCOPE, "grouping": SUMMARY_VIEW_GROUPING,
                       "units": "decimal_MB_GB", "time_basis": SUMMARY_VIEW_TIME_BASIS,
                       "time_format": "YYYY/MM/01–YYYY/MM/DD"},
@@ -425,7 +426,8 @@ def details(config, args, now):
             sql += " WHERE " + " AND ".join(where)
         cursor = connection.execute(sql + " LIMIT ?", parameters + [args.limit + 1])
         columns = [item[0] for item in cursor.description]
-        if columns != list(DETAIL_COLUMNS):
+        detail_columns = view_columns(config)[0]
+        if columns != list(detail_columns):
             raise QueryError("invalid_schema", "audit detail columns do not match the presentation contract")
         records = cursor.fetchall()
     except sqlite3.Error as exc:
@@ -435,7 +437,7 @@ def details(config, args, now):
             connection.close()
     payload = base_payload(config, now)
     payload.update(
-        columns=list(DETAIL_COLUMNS), rows=[dict(zip(DETAIL_COLUMNS, row)) for row in records[:args.limit]],
+        columns=list(detail_columns), rows=[dict(zip(detail_columns, row)) for row in records[:args.limit]],
         has_more=len(records) > args.limit, timezone="Asia/Shanghai", byte_basis=BYTE_BASIS,
         time_basis="last_observed", time_precision="minute",
         deduplication={

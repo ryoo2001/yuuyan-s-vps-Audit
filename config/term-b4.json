@@ -5,7 +5,7 @@
   "mode": "terminal",
   "tcp_stream_recovery": true,
   "node": "term-b4",
-  "max_db_mb": 512,
+  "max_db_mb": 1024,
   "sample_interval": 0.5,
   "archive_node": "center-host",
   "local_cache_hours": 24,
@@ -27,8 +27,8 @@
     }
   },
   "entry_routes": [
-    {"node": "entry-a1", "inbound_port": 2101, "tunnel_ip": "203.0.113.114"},
-    {"node": "entry-a2", "inbound_port": 2101, "tunnel_ip": "203.0.113.110"}
+    {"node": "entry-a1", "inbound_port": 2101, "tunnel_ip": "203.0.113.116"},
+    {"node": "entry-a2", "inbound_port": 2101, "tunnel_ip": "203.0.113.111"}
   ],
   "fingerprint_routes": [
     {"node": "entry-a1", "inbound_port": 2101, "entry_port": 2101, "transport": "tcp"},

@@ -12,8 +12,8 @@ os.environ.setdefault("TRAFFIC_CENTRAL_CONFIG", "/etc/traffic-central-hk/reader.
 os.environ.setdefault("TRAFFIC_CENTRAL_PUBLISHERS", "tb1/term-b1,tb2/term-b2,termc/term-c,tb3/term-b3,termb4/term-b4")
 os.environ.setdefault("TRAFFIC_CENTRAL_NODE", "center-host")
 # tb1 (host deregistered) and tb2 (audit units removed 2026-10-26) no longer publish.
-os.environ.setdefault("TRAFFIC_CENTRAL_RETIRED_PUBLISHERS", "tb1/term-b1,tb2/term-b2")
-os.environ.setdefault("TRAFFIC_CENTRAL_ACTIVE_EDGE_NODES", "termc/entry-b2,tb3/entry-b1,tb3/entry-b2,termb4/entry-a1,termb4/entry-a2")
+os.environ.setdefault("TRAFFIC_CENTRAL_RETIRED_PUBLISHERS", "tb1/term-b1,tb2/term-b2,termb4/term-b4")
+os.environ.setdefault("TRAFFIC_CENTRAL_ACTIVE_EDGE_NODES", "termc/entry-b2,tb3/entry-b1,tb3/entry-b2")
 
 
 def main():

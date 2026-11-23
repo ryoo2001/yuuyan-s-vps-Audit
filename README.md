@@ -168,6 +168,7 @@ python -m unittest discover -s tests -v                 # 运行全部测试
 |---|---|
 | [架构设计](design.md) | 各进程、端口、数据表及指纹匹配的细节 |
 | [数据口径](docs/data.md) | 各视图中数值的计算方式 |
+| [socks5中转统计](docs/socks5中转统计.md) | 入口机解析真实用户 IP、Socks5 出口机分区和上线验收 |
 | [存储说明](docs/storage.md) | 表结构、数据保留期限及新增地区 |
 | [数据库优化](docs/database-optimization.md) | 索引、预先汇总与归档 |
 | [运维说明](docs/operations.md) | 发布、故障排查、归档与备份，以及禁止的操作 |

@@ -106,9 +106,9 @@ class EdgeQueueTests(unittest.TestCase):
         self.auth.write_text('[network_identity]\nnetwork_secret="example"\n')
         self.config = {'auth_file': str(self.auth)}
 
-    def batch(self, events=1, node=NODE):
+    def batch(self, events=1, node=NODE, port=2101):
         event = {'type': 'flow_open', 'capture_ts': time.time(), 'src_ip': '198.51.100.1', 'src_port': 1234,
-                 'dst_ip': '10.0.0.1', 'dst_port': 2101, 'transport': 'tcp', 'flow_id': 'f'}
+                 'dst_ip': '10.0.0.1', 'dst_port': port, 'transport': 'tcp', 'flow_id': 'f'}
         data = {'node': node, 'sent_at': time.time(),
                 'events': [{'event_id': '00000000-0000-4000-8000-%012d' % i, 'event': dict(event)}
                            for i in range(events)]}
@@ -122,6 +122,13 @@ class EdgeQueueTests(unittest.TestCase):
         self.assertEqual(validate(body, NODE, self.signed(body), self.auth), 0)
         with self.assertRaises(ValueError):
             validate(body, NODE, 'bad', self.auth)
+
+    def test_configured_additional_edge_port_is_accepted(self):
+        body = self.batch(1, port=28600)
+        with self.assertRaises(ValueError):
+            validate(body, NODE, self.signed(body), self.auth)
+        self.assertEqual(validate(body, NODE, self.signed(body), self.auth,
+                                  allowed_ports=(2101, 28600)), 1)
 
     def test_queue_delay_preserves_original_event_age(self):
         data = {'sent_at': 100, 'events': [{'event': {'capture_ts': 95}}]}
@@ -190,12 +197,15 @@ class EdgeQueueTests(unittest.TestCase):
             self.assertEqual((state.skipped, db.deleted), ({}, []))
 
     def test_too_many_bad_rows_stop_the_queue_instead_of_hiding_it(self):
-        db = DB(('bad%02d' % i, b'{}') for i in range(edge_queue.MAX_SKIPPED + 1))
-        state = Receiver(self.config, Opener())
-        with patch('builtins.print'), self.assertRaisesRegex(ValueError, 'exceed_limit'):
-            for _ in range(4):
-                state.poll(db)
-        self.assertEqual(len(db.rows), edge_queue.MAX_SKIPPED + 1)
+        # Use a small bound for the guard test. Production keeps a larger
+        # bounded set for a port-migration backlog.
+        with patch.object(edge_queue, 'MAX_SKIPPED', 16):
+            db = DB(('bad%02d' % i, b'{}') for i in range(edge_queue.MAX_SKIPPED + 1))
+            state = Receiver(self.config, Opener())
+            with patch('builtins.print'), self.assertRaisesRegex(ValueError, 'exceed_limit'):
+                for _ in range(4):
+                    state.poll(db)
+            self.assertEqual(len(db.rows), edge_queue.MAX_SKIPPED + 1)
 
     def test_partial_page_keeps_acknowledged_deletes(self):
         class FailSecond(Opener):

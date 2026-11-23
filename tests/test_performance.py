@@ -122,6 +122,46 @@ class SamplingWorkTests(unittest.TestCase):
 
 
 class ControllerCacheTests(unittest.TestCase):
+    def test_poll_reuses_socket_and_recovers_after_http_error(self):
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        from threading import Thread
+        from unittest.mock import Mock
+
+        requests = []
+        class Handler(BaseHTTPRequestHandler):
+            protocol_version = 'HTTP/1.1'
+
+            def log_message(self, *args):
+                pass
+
+            def do_GET(self):
+                requests.append((self.client_address, self.path, self.headers['Authorization']))
+                body = b'{"connections":[]}'
+                self.send_response(503 if len(requests) == 3 else 200)
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        with ThreadingHTTPServer(('127.0.0.1', 0), Handler) as server:
+            thread = Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                url = 'http://127.0.0.1:%d/connections' % server.server_port
+                audit = Mock(config={}, metrics={}, errors={})
+                audit.controller_access.side_effect = [(url, str(i)) for i in range(4)]
+                audit.store.sample.return_value = {}
+                with patch('audit.STOP') as stop:
+                    stop.is_set.side_effect = [False] * 4 + [True]
+                    Audit.poll_mihomo(audit)
+            finally:
+                server.shutdown()
+                thread.join()
+        self.assertEqual([r[1:] for r in requests], [('/connections', 'Bearer ' + str(i)) for i in range(4)])
+        self.assertEqual(len({r[0] for r in requests[:3]}), 1)
+        self.assertNotEqual(requests[2][0], requests[3][0])
+        self.assertEqual(audit.store.sample.call_count, 3)
+        self.assertEqual(audit.errors, {})
+
     def test_unchanged_config_is_cached_and_changes_are_revalidated(self):
         with tempfile.TemporaryDirectory() as root:
             config = Path(root)/'mihomo.yaml'

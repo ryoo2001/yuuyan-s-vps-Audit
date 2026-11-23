@@ -1,0 +1,66 @@
+{
+  "db": "/var/lib/traffic-audit/audit.sqlite",
+  "health": "/var/lib/traffic-audit/health.json",
+  "retention_days": 7,
+  "mode": "terminal",
+  "node": "term-d",
+  "max_db_mb": 2048,
+  "listen": [
+    "203.0.113.114"
+  ],
+  "sample_interval": 0.5,
+  "mihomo_config": "/etc/mihomo/config.yaml",
+  "inbound_ports": [8443],
+  "captures": [
+    {
+      "interface": "eth0",
+      "tcp_ports": [8443],
+      "udp_ports": [8443]
+    }
+  ],
+  "peers": {
+    "term-d-direct": {
+      "auth_file": "/etc/traffic-audit/term-d-direct-auth.toml",
+      "tcp_ports": [8443],
+      "udp_ports": [8443]
+    }
+  },
+  "udp_listen": [],
+  "entry_routes": [],
+  "archive_node": "term-d",
+  "local_cache_hours": 24,
+  "fingerprint_routes": [
+    {
+      "node": "term-d-direct",
+      "inbound_port": 8443,
+      "entry_port": 8443,
+      "transport": "tcp"
+    },
+    {
+      "node": "term-d-direct",
+      "inbound_port": 8443,
+      "entry_port": 8443,
+      "transport": "udp"
+    }
+  ],
+  "inbound_types": {
+    "8443": ["AnyTLS"]
+  },
+  "egress_nodes": {
+    "term-d-direct": "term-d",
+    "term-d": "term-d",
+    "egress-d-direct": "egress-d",
+    "egress-d": "egress-d"
+  },
+  "controller_source_ip": {
+    "8443": {
+      "types": ["AnyTLS"],
+      "egress_by_chain": {
+        "DIRECT": "term-d",
+        "egress-d-socks5": "egress-d"
+      },
+      "default_egress": "term-d",
+      "trust_unmatched_logs": true
+    }
+  }
+}

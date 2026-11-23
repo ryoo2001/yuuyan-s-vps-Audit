@@ -62,17 +62,17 @@ class EntryMappingTests(unittest.TestCase):
 
     def test_entryb2_uses_current_public_entry_without_changing_source(self):
         route = self.hk_routes()["entry-b2"]
-        self.assertEqual(route, "203.0.113.111")
+        self.assertEqual(route, "203.0.113.112")
         self.assertEqual(self.display(peer="10.77.65.1", source="198.51.100.27",
                                      node="entry-b2", route="entry-b2", tunnel=route),
-                         ("198.51.100.27", "203.0.113.111（entry-b2）"))
+                         ("198.51.100.27", "203.0.113.112（entry-b2）"))
 
     def test_entrya_displays_public_entry_and_shared_relay_is_not_identity(self):
         route = self.hk_routes()["entry-a1"]
-        self.assertEqual(route, "203.0.113.114")
+        self.assertEqual(route, "203.0.113.116")
         self.assertEqual(self.display(peer="10.77.65.1", source="198.51.100.27",
                                      node="entry-a1", route="entry-a1", tunnel=route),
-                         ("198.51.100.27", "203.0.113.114（entry-a1）"))
+                         ("198.51.100.27", "203.0.113.116（entry-a1）"))
         self.assertEqual(self.display(peer="10.77.65.1"), ("未识别", "未识别"))
 
     def test_verified_entry_with_unknown_customer_remains_visible(self):

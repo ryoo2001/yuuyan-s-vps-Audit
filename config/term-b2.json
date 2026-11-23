@@ -43,7 +43,7 @@
     {
       "node": "entry-b1",
       "inbound_port": 62057,
-      "tunnel_ip": "203.0.113.112"
+      "tunnel_ip": "203.0.113.113"
     }
   ]
 }

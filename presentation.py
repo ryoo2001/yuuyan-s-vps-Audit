@@ -10,6 +10,13 @@ SUMMARY_VIEW_GROUPING = "source_ip_node_site"
 SUMMARY_VIEW_TIME_BASIS = "beijing_month_start_to_latest_sample_date"
 
 
+def view_columns(config):
+    if isinstance(config.get("egress_nodes"), dict) and config["egress_nodes"]:
+        return (("时间", "源 IP", "IP归属地", "出口机器", "目标网站"),
+                ("时间", "源 IP", "IP归属地", "出口机器", "目标网站", "流量统计"))
+    return COLUMNS, SUMMARY_VIEW_COLUMNS
+
+
 def install(db, config):
     # A single row per connection; historical rates are anchored to last_seen.
     db.execute("""CREATE TABLE IF NOT EXISTS connection_rates(
@@ -21,6 +28,33 @@ def install(db, config):
     db.execute("""CREATE TABLE IF NOT EXISTS ip_geo(
         source_ip TEXT PRIMARY KEY, location TEXT NOT NULL,
         lookup_status TEXT NOT NULL DEFAULT 'center_only', updated_at REAL)""")
+    egress_nodes = config.get("egress_nodes")
+    if isinstance(egress_nodes, dict) and egress_nodes:
+        if any(not isinstance(k, str) or not k or not isinstance(v, str) or not v
+               for k, v in egress_nodes.items()):
+            raise ValueError("invalid egress node mapping")
+        db.execute("CREATE TABLE IF NOT EXISTS egress_nodes(audit_node TEXT PRIMARY KEY, egress_node TEXT NOT NULL)")
+        db.execute("DELETE FROM egress_nodes")
+        db.executemany("INSERT INTO egress_nodes VALUES(?,?)", egress_nodes.items())
+    detail_columns, summary_columns = view_columns(config)
+    detail_node_sql = ("COALESCE((SELECT e.egress_node FROM egress_nodes e "
+                       "WHERE e.audit_node=c.node LIMIT 1),NULLIF(c.node,''),'未识别')"
+                       if egress_nodes else
+                       "CASE WHEN c.node IS NULL OR c.node='' THEN"
+                       " CASE WHEN e.node IS NULL THEN '未识别'"
+                       " WHEN e.tunnel_ip IS NULL THEN '直连（' || e.node || '；未经过隧道）'"
+                       " ELSE e.tunnel_ip || '（' || e.node || '）' END"
+                       " WHEN e.node IS NULL AND (c.source_ip IS NULL OR c.source_ip='') THEN '未识别'"
+                       " WHEN e.node IS NULL THEN '未核验（' || c.node || '）'"
+                       " WHEN e.tunnel_ip IS NULL THEN '直连（' || c.node || '；未经过隧道）'"
+                       " ELSE e.tunnel_ip || '（' || c.node || '）' END")
+    detail_node_alias = detail_columns[3]
+    detail_partition_node_sql = (detail_node_sql if egress_nodes else
+                                 "CASE WHEN c.node IS NULL OR c.node='' THEN c.connection_id ELSE c.node END")
+    summary_node_sql = ("COALESCE((SELECT e.egress_node FROM egress_nodes e "
+                        "WHERE e.audit_node=s.node LIMIT 1),NULLIF(s.node,''),'未识别')"
+                        if egress_nodes else "COALESCE(NULLIF(s.node,''),'未识别')")
+    summary_node_alias = summary_columns[3]
     routes = []
     for route in config.get("entry_routes", []):
         node, port, address = route["node"], route["inbound_port"], route["tunnel_ip"]
@@ -39,14 +73,7 @@ def install(db, config):
         COALESCE(NULLIF(c.source_ip,''),'未识别') AS "源 IP",
         CASE WHEN c.source_ip IS NULL OR c.source_ip='' THEN '未识别'
              ELSE COALESCE(NULLIF(g.location,''),'未查询') END AS "IP归属地",
-        CASE WHEN c.node IS NULL OR c.node='' THEN
-            CASE WHEN e.node IS NULL THEN '未识别'
-                 WHEN e.tunnel_ip IS NULL THEN '直连（' || e.node || '；未经过隧道）'
-                 ELSE e.tunnel_ip || '（' || e.node || '）' END
-          WHEN e.node IS NULL AND (c.source_ip IS NULL OR c.source_ip='') THEN '未识别'
-          WHEN e.node IS NULL THEN '未核验（' || c.node || '）'
-          WHEN e.tunnel_ip IS NULL THEN '直连（' || c.node || '；未经过隧道）'
-          ELSE e.tunnel_ip || '（' || c.node || '）' END AS "隧道内网 IP（入口机器）",
+        {detail_node_sql} AS "{detail_node_alias}",
         c.site AS "目标网站"
       FROM (
         SELECT c.*,
@@ -58,7 +85,7 @@ def install(db, config):
                           OR c.last_seen IS NULL
                      THEN c.connection_id ELSE c.source_ip END,
               c.site,
-              CASE WHEN c.node IS NULL OR c.node='' THEN c.connection_id ELSE c.node END,
+              {detail_partition_node_sql},
               c.inbound_port,
               CASE WHEN c.last_seen IS NULL THEN c.connection_id
                    ELSE CAST((c.last_seen + 2.5) / 5 AS INTEGER) END
@@ -76,7 +103,7 @@ def install(db, config):
     # Old raw samples are folded into traffic_rollup before retention pruning;
     # keep the view as one snapshot over both durable totals and live rows.
     db.execute('DROP VIEW IF EXISTS "流量汇总"')
-    db.execute("""CREATE VIEW "流量汇总" AS
+    db.execute(f"""CREATE VIEW "流量汇总" AS
       WITH summary_rows AS (
         SELECT ts,source_ip,node,site,upload_bytes,download_bytes FROM samples
         UNION ALL
@@ -95,12 +122,12 @@ def install(db, config):
         COALESCE(NULLIF(s.source_ip,''),'未识别') AS "源 IP",
         CASE WHEN s.source_ip IS NULL OR s.source_ip='' THEN '未识别'
              ELSE COALESCE(NULLIF((SELECT g.location FROM ip_geo g WHERE g.source_ip=s.source_ip),''),'未查询') END AS "IP归属地",
-        COALESCE(NULLIF(s.node,''),'未识别') AS "入口机器",
+        {summary_node_sql} AS "{summary_node_alias}",
         COALESCE(NULLIF(s.site,''),'未识别') AS "目标网站",
         CASE WHEN SUM(COALESCE(s.upload_bytes,0)+COALESCE(s.download_bytes,0)) >= 1000000000
           THEN printf('%.2f GB', SUM(COALESCE(s.upload_bytes,0)+COALESCE(s.download_bytes,0))/1000000000.0)
           ELSE printf('%.2f MB', SUM(COALESCE(s.upload_bytes,0)+COALESCE(s.download_bytes,0))/1000000.0) END AS "流量统计"
       FROM filtered s CROSS JOIN latest
       GROUP BY latest.latest_ts, COALESCE(NULLIF(s.source_ip,''),'未识别'),
-        COALESCE(NULLIF(s.node,''),'未识别'), COALESCE(NULLIF(s.site,''),'未识别')
+        {summary_node_sql}, COALESCE(NULLIF(s.site,''),'未识别')
       ORDER BY SUM(COALESCE(s.upload_bytes,0)+COALESCE(s.download_bytes,0)) DESC, 2, 4, 5""" )

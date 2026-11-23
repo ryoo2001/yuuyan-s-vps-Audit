@@ -15,7 +15,18 @@ HEALTH = Path(os.environ.get('TRAFFIC_CENTRAL_HEALTH', '/var/lib/traffic-central
 PUBLISHER = os.environ.get('TRAFFIC_CENTRAL_PUBLISHER', 'term-a1')
 NODE = os.environ.get('TRAFFIC_CENTRAL_NODE', 'legacy-center')
 LOCK_NAME = os.environ.get('TRAFFIC_CENTRAL_LOCK', 'traffic-audit-ingest')
+TABLE_PREFIX = os.environ.get('TRAFFIC_CENTRAL_TABLE_PREFIX', '')
 MAX_LINE = 1000000
+
+
+def physical_table(name):
+    if name not in TABLES and name != 'sync_state':
+        raise ValueError('invalid_table_name')
+    return '`' + TABLE_PREFIX + name + '`'
+
+
+def prefixed_upsert_sql(name):
+    return upsert_sql(name).replace('`' + name + '`', physical_table(name), 1)
 PATCH_VERSION = "2026.10.11.1"
 
 ROLLUP_DDL = '''CREATE TABLE IF NOT EXISTS traffic_rollup (
@@ -86,7 +97,7 @@ def validate_batch(payload):
 def ingest(db, payload):
     validate_batch(payload)
     with db.cursor() as c:
-        c.execute('SELECT epoch,last_seq FROM sync_state WHERE publisher=%s FOR UPDATE', (PUBLISHER,))
+        c.execute('SELECT epoch,last_seq FROM '+physical_table('sync_state')+' WHERE publisher=%s FOR UPDATE', (PUBLISHER,))
         state = c.fetchone()
         if state and state[0] != payload['epoch']:
             raise ValueError('publisher_epoch_changed')
@@ -98,8 +109,8 @@ def ingest(db, payload):
         # One multi-row upsert per table instead of one statement per row. The
         # absolute-value/_seq guard is unchanged; only round trips and bytes drop.
         for table, rows in pending.items():
-            c.executemany(upsert_sql(table), rows)
-        c.execute('''INSERT INTO sync_state(publisher,epoch,last_seq,last_received,sent_at,missing_rows)
+            c.executemany(prefixed_upsert_sql(table), rows)
+        c.execute('''INSERT INTO '''+physical_table('sync_state')+'''(publisher,epoch,last_seq,last_received,sent_at,missing_rows)
                      VALUES(%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE
                      last_seq=GREATEST(last_seq,VALUES(last_seq)),last_received=VALUES(last_received),
                      sent_at=VALUES(sent_at),missing_rows=GREATEST(missing_rows,VALUES(missing_rows))''',

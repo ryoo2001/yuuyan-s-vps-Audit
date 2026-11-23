@@ -295,6 +295,20 @@ class PresentationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             install(self.store.db, invalid)
 
+    def test_egress_display_maps_nodes_and_reader_columns(self):
+        self.store.db.close()
+        self.cfg['egress_nodes'] = {'term-d-direct': 'term-d', 'egress-d': 'egress-d'}
+        self.store = Store(self.cfg)
+        self.store.audit_start = self.now - 60
+        self.store.sample([self.conn()], self.now + 1, monotonic_now=101)
+        self.store.db.execute("UPDATE connection_state SET source_ip='203.0.113.44',node='term-d-direct'")
+        cursor = self.store.db.execute('SELECT * FROM "审计明细"')
+        self.assertEqual(tuple(c[0] for c in cursor.description),
+                         ('时间', '源 IP', 'IP归属地', '出口机器', '目标网站'))
+        self.assertEqual(cursor.fetchone()[3], 'term-d')
+        out = details(self.cfg, parse_args(['details', '--limit', '1']), self.now + 1)
+        self.assertEqual(out['columns'][3], '出口机器')
+
 
 if __name__ == '__main__':
     unittest.main()

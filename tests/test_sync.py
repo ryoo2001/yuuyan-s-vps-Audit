@@ -126,8 +126,10 @@ class PublisherCadenceTests(unittest.TestCase):
 
 
 class CentralFreshnessTests(unittest.TestCase):
-    def health(self, sync_age=31, peer_age=35, count=3, missing=0, retired=False):
+    def health(self, sync_age=31, peer_age=35, count=None, missing=0, retired=False):
         now = 10000
+        if count is None:
+            count = len(central_query.ACTIVE_EDGE_NODES)
         db = MagicMock()
         cursor = db.cursor.return_value.__enter__.return_value
         cursor.fetchall.side_effect = [

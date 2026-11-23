@@ -18,7 +18,7 @@ import storage
 
 
 GEO_TABLE = "ip_geo"
-DEFAULT_DATABASES = ("region-a", "hk")
+DEFAULT_DATABASES = ("region-a", "hk", "us")
 DATA_ROOT = Path(os.environ.get("TRAFFIC_CENTRAL_GEO_ROOT", "/var/lib/traffic-central/geo"))
 V4_URL = os.environ.get(
     "TRAFFIC_CENTRAL_GEO_V4_URL",

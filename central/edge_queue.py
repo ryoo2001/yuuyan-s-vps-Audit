@@ -26,7 +26,10 @@ FETCH_ROWS = 8
 IDLE_POLL_SECONDS = (1.0, 2.0, 3.0)
 EXPIRE_HOURS = 24
 EXPIRE_EVERY_SECONDS = 300
-MAX_SKIPPED = 16
+# A port migration can leave a bounded batch of historical rows in the shared
+# queue. Keep enough skipped IDs in memory to drain those rows without blocking
+# newer in-scope batches, while retaining a hard bound on process memory.
+MAX_SKIPPED = 4096
 
 
 class Undeliverable(ValueError):
@@ -49,7 +52,7 @@ def connect(config):
     return pymysql.connect(**kwargs)
 
 
-def validate(body, node, signature, auth_file, expected_node=NODE):
+def validate(body, node, signature, auth_file, expected_node=NODE, allowed_ports=(2101,)):
     if node != expected_node or not 0 < len(body) <= MAX_BODY:
         raise ValueError('invalid_request')
     key = derive_key(auth_file, node)
@@ -67,7 +70,7 @@ def validate(body, node, signature, auth_file, expected_node=NODE):
             raise ValueError('invalid_event_id')
         event = item.get('event')
         validate_event(event)
-        if event['type'] not in ('health', 'capture_stats') and event['dst_port'] != 2101:
+        if event['type'] not in ('health', 'capture_stats') and event['dst_port'] not in allowed_ports:
             raise ValueError('invalid_port')
     return len(data['events'])
 
@@ -131,7 +134,8 @@ class Sender:
                     raise
 
     def accept(self, body, node, signature, now=None):
-        count = validate(body, node, signature, self.config['auth_file'], self.config.get('node', NODE))
+        count = validate(body, node, signature, self.config['auth_file'], self.config.get('node', NODE),
+                         tuple(self.config.get('allowed_ports', (2101,))))
         now = time.monotonic() if now is None else now
         if count or now - self.last_forward >= HEARTBEAT_SECONDS:
             self.store(body)
