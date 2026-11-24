@@ -45,6 +45,7 @@ class HandoverTests(unittest.TestCase):
             "deploy/stream.manifest.json", "deploy/hk-unknown-fix.manifest.json", "deploy/optimize.manifest.json",
             "central/detail_view.py",
             "docs/socks5中转统计.md", "config/term-d.json", "central/us_views.py",
+            "docs/cache-plan.md",
         )
         for name in (*check.REQUIRED_FILES, *public_link_targets):
             if not (ROOT / name).is_file():

@@ -52,7 +52,7 @@ FROM (
        CASE WHEN c.node IS NULL OR c.node='' THEN c.connection_id ELSE c.node END,
        c.inbound_port,
        CASE WHEN c.last_seen IS NULL THEN c.connection_id
-            ELSE FLOOR((c.last_seen + 2.5) / 5) END
+            ELSE FLOOR(c.last_seen / 60) END
      ORDER BY c.last_seen DESC, c.connection_id
    ) AS _session_rank
  FROM connection_state c
@@ -111,5 +111,5 @@ CREATE OR REPLACE SQL SECURITY DEFINER VIEW `同步状态` AS
 SELECT publisher AS `采集节点`,
  DATE_FORMAT(TIMESTAMPADD(SECOND,FLOOR(last_received),'1970-01-01 08:00:00'),'%Y/%m/%d %H:%i:%s') AS `最后入库时间`,
  ROUND(GREATEST(0,UNIX_TIMESTAMP(CURRENT_TIMESTAMP(6))-last_received),1) AS `距上次同步秒`,last_seq AS `确认位置`,missing_rows AS `单批最大缺失数`,
- '流量为采样下界；明细时间到分钟，按5秒窗口去重；流量汇总为北京时间当月1日至最新样本' AS `统计说明`
+ '流量为采样下界；明细时间到分钟，按分钟去重；流量汇总为北京时间当月1日至最新样本' AS `统计说明`
 FROM sync_state;

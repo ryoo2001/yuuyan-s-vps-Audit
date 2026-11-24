@@ -4,7 +4,7 @@ import re
 import time
 from model import TABLES
 import storage
-from tier_policy import HOT_DAYS, ONLINE_DAYS, POLICY_VERSION
+from tier_policy import HOT_DAYS, ONLINE_DAYS, POLICY_VERSION, RAW_HOT_HOURS, RAW_HOT_TABLES
 
 POLICY_COLUMNS = {
     'archive_policy_version':'INT NOT NULL DEFAULT 0',
@@ -50,6 +50,8 @@ def hot_projection(ddl,database,prefixes,name):
     primary={'审计明细':('connection_state','last_seen'),'访问记录':('visits','ts'),'入口流量汇总':('wire_samples','bucket')}.get(name)
     if not primary:return ddl
     logical,stamp=primary
+    # Large raw tables hold only 48 h locally; wire_samples keeps the HOT_DAYS view.
+    window=RAW_HOT_HOURS*3600 if logical in RAW_HOT_TABLES else HOT_DAYS*86400
     for prefix in prefixes:
         physical=storage.table(database,prefix,logical)
         pattern=r'\b(FROM|JOIN)\s+(?:`'+re.escape(database)+r'`\.)?`'+re.escape(prefix+logical)+r'`(?![a-z0-9_])'
@@ -58,7 +60,7 @@ def hot_projection(ddl,database,prefixes,name):
             following=re.match(r'\s+(?:AS\s+)?(`[^`]+`|[a-z][a-z0-9_]*)',original[match.end():],re.I)
             reserved={'where','order','group','join','left','right','inner','outer','on','union','limit','having','force','use','ignore'}
             alias='' if following and following[1].strip('`').lower() not in reserved else ' '+storage.identifier(prefix+logical)
-            return match[1]+' (SELECT * FROM '+physical+' WHERE '+storage.identifier(stamp)+'>=UNIX_TIMESTAMP()-'+str(HOT_DAYS*86400)+')'+alias
+            return match[1]+' (SELECT * FROM '+physical+' WHERE '+storage.identifier(stamp)+'>=UNIX_TIMESTAMP()-'+str(window)+')'+alias
         ddl,count=re.subn(pattern,replace,ddl,flags=re.I)
         ddl=ddl.replace(storage.identifier(database)+'.'+storage.identifier(prefix+logical)+'.',storage.identifier(prefix+logical)+'.')
         if not count:raise ValueError('hot_projection_anchor_missing:'+name+'/'+prefix)

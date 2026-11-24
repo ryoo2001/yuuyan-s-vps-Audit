@@ -26,7 +26,21 @@ from pathlib import Path
 RELATIONS = json.loads(Path("/usr/local/libexec/traffic-central-hk-store/relations.json").read_text())
 
 
-from tier_policy import HOT_DAYS, ONLINE_DAYS, metadata as tier_metadata
+from tier_policy import HOT_DAYS, ONLINE_DAYS, RAW_HOT_HOURS, metadata as tier_metadata
+import re
+import tier_summary
+import history_cache
+import hk_history
+from source_query import parse_iso
+
+_shared_parse_args = parse_args
+
+def parse_args(argv):
+    # details --from/--to is central-only; the shared collector parser stays unchanged.
+    argv, window = history_cache.split_window(list(argv), parse_iso, QueryError)
+    args = _shared_parse_args(argv)
+    args.window = window
+    return args
 SUMMARY_VIEW_SCOPE='current_beijing_calendar_month_to_latest'
 SUMMARY_VIEW_TIME_BASIS='beijing_month_start_to_latest_sample_date'
 
@@ -46,7 +60,7 @@ def _detail_key(row):
                or not node or inbound_port is None or last_seen is None)
     identity = connection_id if invalid else source_ip
     route_node = connection_id if not node else node
-    bucket = connection_id if last_seen is None else math.floor((last_seen + 2.5) / 5)
+    bucket = connection_id if last_seen is None else math.floor(last_seen / 60)
     return source_id,identity,site,route_node,inbound_port,bucket
 
 
@@ -81,7 +95,7 @@ def _read_details(cursor, args):
     state = relation('connection_state')
     routes = relation('entry_routes')
     geo = geo_relation()
-    where, params = ['c.last_seen>=%s'], [time.time()-HOT_DAYS*86400]
+    where, params = ['c.last_seen>=%s'], [time.time()-RAW_HOT_HOURS*3600]
     for column, value in (('c.source_ip', args.source_ip), ('c.site', args.domain)):
         if value is not None:
             where.append(column + '=%s')
@@ -129,6 +143,14 @@ def _read_details(cursor, args):
         offset += DETAIL_BATCH_SIZE
 
 
+# One hourly table per namespace, the same namespaces the samples relation unions.
+HOURLY_PREFIXES = tuple(re.findall(r'from `hk`\.`([a-z][a-z0-9]*_)samples`', RELATIONS['samples']))
+if not HOURLY_PREFIXES or len(set(HOURLY_PREFIXES)) != len(HOURLY_PREFIXES):
+    raise ValueError('hk_hourly_namespaces_unreadable')
+HOURLY = ('(' + ' union all '.join(
+    'select hour_start,source_ip,node,site,upload_bytes,download_bytes,visit_events from `hk`.`' + p + 'traffic_hourly`'
+    for p in HOURLY_PREFIXES) + ') AS `traffic_hourly`')
+
 def counts(row):
     connections,up,down,events=row
     return {'connections':int(connections),'upload_bytes':int(up),'download_bytes':int(down),
@@ -164,7 +186,10 @@ def run(args):
                                 'publishers':list(PUBLISHERS),'retired_publishers':[p for p in PUBLISHERS if p in RETIRED_PUBLISHERS],'peers':peers}
                 return out
             if args.command=='details':
-                rows = _read_details(c, args)
+                if args.window:
+                    rows,history=hk_history.read(c,args,relation);hk_history.annotate(out,history,args.window)
+                else:
+                    rows = _read_details(c, args)
                 out.update(columns=list(DETAIL_COLUMNS),rows=[dict(zip(DETAIL_COLUMNS,r)) for r in rows[:args.limit]],
                            has_more=len(rows)>args.limit,timezone='Asia/Shanghai',time_basis='last_observed',
                            time_precision='minute',
@@ -173,22 +198,15 @@ def run(args):
                                           'key':['source_ip','node','inbound_port','site'],
                                           'representative':'latest_last_seen',
                                           'unknown_policy':'unknown source/site/entry rows are not merged'})
-                out['warnings'].append('时间显示到分钟；同一真实源 IP、入口和目标网站在 5 秒会话窗口内只保留最新一行。')
+                out['warnings'].append('时间显示到分钟；同一真实源 IP、入口和目标网站在同一分钟内只保留最新一行。')
                 return out
             column={'source_ip':'source_ip','site':'site','node':'node'}[args.group_by]
-            key="COALESCE(NULLIF(`"+column+"`,''),'unknown')"
-            where='ts>=%s AND ts<%s'
-            params=[args.start.timestamp(),args.end.timestamp()]
-            for name,value in [('source_ip',args.source_ip),('site',args.domain)]:
-                if value is not None:where+=' AND `'+name+'`=%s';params.append(value)
-            c.execute('SELECT COUNT(DISTINCT connection_id),COALESCE(SUM(upload_bytes),0),COALESCE(SUM(download_bytes),0),0 FROM ' + relation('samples') + ' WHERE '+where,params)
-            totals=counts(c.fetchone())
-            c.execute('SELECT COUNT(*) FROM ' + relation('visits') + ' WHERE '+where,params);totals['request_events']=c.fetchone()[0]
-            union=('SELECT '+key+' k, COUNT(DISTINCT connection_id) connections, SUM(upload_bytes) up, SUM(download_bytes) down,0 events FROM ' + relation('samples') + ' WHERE '+where+' GROUP BY 1 UNION ALL SELECT '+key+' k,0 connections,0 up,0 down,COUNT(*) events FROM ' + relation('visits') + ' WHERE '+where+' GROUP BY 1')
-            c.execute('SELECT COUNT(DISTINCT k) FROM ('+union+') x',params+params);groups=c.fetchone()[0]
-            c.execute('SELECT k,SUM(connections),SUM(up),SUM(down),SUM(events) FROM ('+union+') x GROUP BY k ORDER BY SUM(up)+SUM(down) DESC,k LIMIT %s',params+params+[args.limit])
-            rows=[{'key':r[0],**counts(r[1:])} for r in c.fetchall()]
-            if args.start.timestamp()<now-ONLINE_DAYS*86400:out['warnings'].append('requested_window_requires_explicit_cold_archive')
+            # Raw rows cover the last 48 h; older parts of the window read hourly totals.
+            totals,rows,groups,tier,tier_warnings=tier_summary.summary(
+                c,column,{'source_ip':args.source_ip,'site':args.domain},
+                args.start.timestamp(),args.end.timestamp(),now,args.limit,
+                samples=relation('samples'),visits=relation('visits'),hourly=HOURLY)
+            out['warnings'].extend(tier_warnings);out['storage_window']=tier
             out.update(window={'from':getattr(args,'from'),'to':args.to},rows=rows,totals=totals,groups_total=groups,
                        group_by=args.group_by,truncated=groups>args.limit,
                        summary_view={'name':'流量汇总','columns':list(SUMMARY_VIEW_COLUMNS),

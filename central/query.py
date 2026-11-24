@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Bounded read-only MySQL queries; fixed database and audited CLI contract."""
-import json,os,sys,time,math
+import heapq,json,os,sys,time,math
 from datetime import datetime,timezone,timedelta
 os.environ.setdefault("TRAFFIC_CENTRAL_CONFIG", "/etc/traffic-central/reader.json")
 
-from source_query import (parse_args,DETAIL_COLUMNS,BYTE_BASIS,DETAIL_DEDUP_WINDOW_SECONDS,
+from source_query import (parse_args,parse_iso,DETAIL_COLUMNS,BYTE_BASIS,DETAIL_DEDUP_WINDOW_SECONDS,
                           DETAIL_DEDUP_BASIS,SUMMARY_VIEW_COLUMNS,SUMMARY_VIEW_SCOPE,
                           SUMMARY_VIEW_GROUPING,SUMMARY_VIEW_TIME_BASIS,QueryError,SUMMARY_WARNINGS)
+import history_cache
 from receive import connect
 
 # Allow the 30-second upload interval plus two missed cycles of grace.
@@ -24,7 +25,8 @@ DETAIL_BATCH_SIZE = 500
 RETIRED_PUBLISHERS = tuple(x for x in os.environ.get('TRAFFIC_CENTRAL_RETIRED_PUBLISHERS', '').split(',') if x)
 
 
-from tier_policy import HOT_DAYS, ONLINE_DAYS, metadata as tier_metadata
+from tier_policy import HOT_DAYS, ONLINE_DAYS, RAW_HOT_HOURS, metadata as tier_metadata
+import tier_summary
 SUMMARY_VIEW_SCOPE='current_beijing_calendar_month_to_latest'
 SUMMARY_VIEW_TIME_BASIS='beijing_month_start_to_latest_sample_date'
 
@@ -34,7 +36,7 @@ def _detail_key(row):
                or not node or inbound_port is None or last_seen is None)
     identity = connection_id if invalid else source_ip
     route_node = connection_id if not node else node
-    bucket = connection_id if last_seen is None else math.floor((last_seen + 2.5) / 5)
+    bucket = connection_id if last_seen is None else math.floor(last_seen / 60)
     return identity,site,route_node,inbound_port,bucket
 
 
@@ -65,8 +67,57 @@ def _detail_display(row):
     return [stamp.strftime('%Y/%m/%d %H:%M'), source, location, tunnel, site or '']
 
 
+_shared_parse_args = parse_args
+
+
+def parse_args(argv):
+    # details --from/--to is central-only; the shared collector parser stays unchanged.
+    argv, window = history_cache.split_window(list(argv), parse_iso, QueryError)
+    args = _shared_parse_args(argv)
+    args.window = window
+    return args
+
+
+def _history_rows(cursor, database, chunks, args, lo, hi):
+    """Cold rows in the region-a row shape, with current routes and locations attached."""
+    cursor.execute('SELECT node,inbound_port,tunnel_ip FROM entry_routes')
+    routes = cursor.fetchall()
+    by_port = {}
+    by_tunnel = {}
+    for route in routes:
+        by_port.setdefault((route[0], route[1]), route)
+        by_tunnel.setdefault(route[2], route)
+    places = {}
+    for _, cid, seen, peer, port, site, ip, node in history_cache.rows(
+            database, chunks, lo, hi, args.source_ip, args.domain):
+        route = by_port.get((node, port)) or (by_tunnel.get(peer) if not node else None)
+        if ip and ip not in places:
+            cursor.execute('SELECT location FROM ip_geo WHERE source_ip=%s', (ip,))
+            found = cursor.fetchone()
+            places[ip] = found[0] if found else None
+        yield (cid, seen, peer, port, site, ip, node, route[0] if route else None,
+               route[2] if route else None, places.get(ip))
+
+
+def _raw_rows(cursor, sql, params, first):
+    batch, offset = first, 0
+    while True:
+        yield from batch
+        if len(batch) < DETAIL_BATCH_SIZE:
+            return
+        offset += DETAIL_BATCH_SIZE
+        cursor.execute(sql, params + [DETAIL_BATCH_SIZE, offset])
+        batch = cursor.fetchall()
+
+
 def _read_details(cursor, args):
-    where, params = ['c.last_seen>=%s'], [time.time()-HOT_DAYS*86400]
+    now = time.time()
+    window = getattr(args, 'window', None)
+    lo, hi = window if window else (now-RAW_HOT_HOURS*3600, None)
+    where, params = ['c.last_seen>=%s'], [lo]
+    if hi is not None:
+        where.append('c.last_seen<%s')
+        params.append(hi)
     for column, value in (('c.source_ip', args.source_ip), ('c.site', args.domain)):
         if value is not None:
             where.append(column + '=%s')
@@ -79,39 +130,54 @@ def _read_details(cursor, args):
     if where:
         sql += ' WHERE ' + ' AND '.join(where)
     sql += ' ORDER BY c.last_seen DESC,c.connection_id LIMIT %s OFFSET %s'
-    selected, seen, offset = [], set(), 0
-    while True:
-        try:
-            cursor.execute(sql, params + [DETAIL_BATCH_SIZE, offset])
-        except Exception as exc:
-            # Older center grants expose only the five public views. Keep that
-            # contract working while newer grants can use the indexed tables.
-            message = str(exc).lower()
-            code = exc.args[0] if getattr(exc, 'args', ()) else None
-            if offset == 0 and (code == 1142 or 'command denied' in message or 'permission' in message):
-                where, view_params = [], []
-                for column, value in (('`源 IP`', args.source_ip), ('`目标网站`', args.domain)):
-                    if value is not None:
-                        where.append(column + '=%s')
-                        view_params.append(value)
-                view_sql = 'SELECT * FROM `审计明细`'
-                if where:
-                    view_sql += ' WHERE ' + ' AND '.join(where)
-                cursor.execute(view_sql + ' LIMIT %s', view_params + [args.limit + 1])
-                return cursor.fetchall()
-            raise
-        batch = cursor.fetchall()
-        for row in batch:
-            key = _detail_key(row)
-            if key in seen:
-                continue
-            seen.add(key)
-            selected.append(_detail_display(row))
-            if len(selected) > args.limit:
-                return selected
-        if len(batch) < DETAIL_BATCH_SIZE:
-            return selected
-        offset += DETAIL_BATCH_SIZE
+    selected, seen, ids, history = [], set(), set(), None
+    try:
+        cursor.execute(sql, params + [DETAIL_BATCH_SIZE, 0])
+    except Exception as exc:
+        # Older center grants expose only the five public views. Keep that
+        # contract working while newer grants can use the indexed tables.
+        message = str(exc).lower()
+        code = exc.args[0] if getattr(exc, 'args', ()) else None
+        if not window and (code == 1142 or 'command denied' in message or 'permission' in message):
+            where, view_params = [], []
+            for column, value in (('`源 IP`', args.source_ip), ('`目标网站`', args.domain)):
+                if value is not None:
+                    where.append(column + '=%s')
+                    view_params.append(value)
+            view_sql = 'SELECT * FROM `审计明细`'
+            if where:
+                view_sql += ' WHERE ' + ' AND '.join(where)
+            cursor.execute(view_sql + ' LIMIT %s', view_params + [args.limit + 1])
+            return cursor.fetchall(), None
+        raise
+    streams = [_raw_rows(cursor, sql, params, cursor.fetchall())]
+    if window and lo < now-RAW_HOT_HOURS*3600:
+        # Rows archived before this snapshot are in listed chunks; the rest are still raw.
+        chunks, first = history_cache.snapshot(cursor, lo, hi)
+        cursor.execute('SELECT DATABASE()')
+        database = cursor.fetchone()[0]
+        history = {'first_archived_day': first, 'days': [], 'chunks': 0, 'fetched_chunks': 0,
+                   'fetched_bytes': 0, 'fetch_seconds': 0, 'source_tier': 'none'}
+        if chunks:
+            try:
+                history.update(history_cache.load(database, chunks))
+                streams.append(_history_rows(cursor, database, chunks, args, lo, hi))
+            except history_cache.HistoryError as exc:
+                history.update(source_tier='unavailable', error=str(exc))
+            finally:
+                history_cache.evict()
+    for row in heapq.merge(*streams, key=lambda r: (-r[1], r[0])):
+        if row[0] in ids:
+            continue  # a connection re-archived after an update: keep its latest copy
+        ids.add(row[0])
+        key = _detail_key(row)
+        if key in seen:
+            continue
+        seen.add(key)
+        selected.append(_detail_display(row))
+        if len(selected) > args.limit:
+            break
+    return selected, history
 
 
 def counts(row):
@@ -149,7 +215,16 @@ def run(args):
                                 'publishers':list(PUBLISHERS),'retired_publishers':[p for p in PUBLISHERS if p in RETIRED_PUBLISHERS],'peers':peers}
                 return out
             if args.command=='details':
-                rows = _read_details(c, args)
+                rows, history = _read_details(c, args)
+                if args.window:
+                    out['window']={'from':args.window[0],'to':args.window[1]}
+                if history is not None:
+                    out['history']=history
+                    out['warnings'].append('history_details_from_cold_chunks_with_current_routes_and_locations')
+                    if history['source_tier']=='unavailable':
+                        out['status']='degraded';out['warnings'].append('history_details_unavailable:'+history['error'])
+                    if history['first_archived_day'] is None or history['first_archived_day']>history_cache.beijing_day(args.window[0]):
+                        out['warnings'].append('history_details_not_available_before:'+str(history['first_archived_day']))
                 out.update(columns=list(DETAIL_COLUMNS),rows=[dict(zip(DETAIL_COLUMNS,r)) for r in rows[:args.limit]],
                            has_more=len(rows)>args.limit,timezone='Asia/Shanghai',time_basis='last_observed',
                            time_precision='minute',
@@ -158,22 +233,14 @@ def run(args):
                                           'key':['source_ip','node','inbound_port','site'],
                                           'representative':'latest_last_seen',
                                           'unknown_policy':'unknown source/site/entry rows are not merged'})
-                out['warnings'].append('时间显示到分钟；同一真实源 IP、入口和目标网站在 5 秒会话窗口内只保留最新一行。')
+                out['warnings'].append('时间显示到分钟；同一真实源 IP、入口和目标网站在同一分钟内只保留最新一行。')
                 return out
             column={'source_ip':'source_ip','site':'site','node':'node'}[args.group_by]
-            key="COALESCE(NULLIF(`"+column+"`,''),'unknown')"
-            where='ts>=%s AND ts<%s'
-            params=[args.start.timestamp(),args.end.timestamp()]
-            for name,value in [('source_ip',args.source_ip),('site',args.domain)]:
-                if value is not None:where+=' AND `'+name+'`=%s';params.append(value)
-            c.execute('SELECT COUNT(DISTINCT connection_id),COALESCE(SUM(upload_bytes),0),COALESCE(SUM(download_bytes),0),0 FROM samples WHERE '+where,params)
-            totals=counts(c.fetchone())
-            c.execute('SELECT COUNT(*) FROM visits WHERE '+where,params);totals['request_events']=c.fetchone()[0]
-            union=('SELECT '+key+' k, COUNT(DISTINCT connection_id) connections, SUM(upload_bytes) up, SUM(download_bytes) down,0 events FROM samples WHERE '+where+' GROUP BY 1 UNION ALL SELECT '+key+' k,0 connections,0 up,0 down,COUNT(*) events FROM visits WHERE '+where+' GROUP BY 1')
-            c.execute('SELECT COUNT(DISTINCT k) FROM ('+union+') x',params+params);groups=c.fetchone()[0]
-            c.execute('SELECT k,SUM(connections),SUM(up),SUM(down),SUM(events) FROM ('+union+') x GROUP BY k ORDER BY SUM(up)+SUM(down) DESC,k LIMIT %s',params+params+[args.limit])
-            rows=[{'key':r[0],**counts(r[1:])} for r in c.fetchall()]
-            if args.start.timestamp()<now-ONLINE_DAYS*86400:out['warnings'].append('requested_window_requires_explicit_cold_archive')
+            # Raw rows cover the last 48 h; older parts of the window read hourly totals.
+            totals,rows,groups,tier,tier_warnings=tier_summary.summary(
+                c,column,{'source_ip':args.source_ip,'site':args.domain},
+                args.start.timestamp(),args.end.timestamp(),now,args.limit)
+            out['warnings'].extend(tier_warnings);out['storage_window']=tier
             out.update(window={'from':getattr(args,'from'),'to':args.to},rows=rows,totals=totals,groups_total=groups,
                        group_by=args.group_by,truncated=groups>args.limit,
                        summary_view={'name':'流量汇总','columns':list(SUMMARY_VIEW_COLUMNS),

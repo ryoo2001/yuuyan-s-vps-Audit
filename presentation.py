@@ -2,7 +2,7 @@
 import ipaddress
 
 COLUMNS = ("时间", "源 IP", "IP归属地", "隧道内网 IP（入口机器）", "目标网站")
-DETAIL_DEDUP_WINDOW_SECONDS = 5
+DETAIL_DEDUP_WINDOW_SECONDS = 60
 DETAIL_DEDUP_BASIS = "source_ip_site_entry_fixed_window"
 SUMMARY_VIEW_COLUMNS = ("时间", "源 IP", "IP归属地", "入口机器", "目标网站", "流量统计")
 SUMMARY_VIEW_SCOPE = "current_beijing_calendar_month_to_latest"
@@ -88,7 +88,7 @@ def install(db, config):
               {detail_partition_node_sql},
               c.inbound_port,
               CASE WHEN c.last_seen IS NULL THEN c.connection_id
-                   ELSE CAST((c.last_seen + 2.5) / 5 AS INTEGER) END
+                   ELSE CAST(c.last_seen / 60 AS INTEGER) END
             ORDER BY c.last_seen DESC, c.connection_id
           ) AS _session_rank
         FROM connection_state c

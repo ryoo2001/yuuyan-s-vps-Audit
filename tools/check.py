@@ -54,7 +54,7 @@ CONTRACT = {
     "sync_stale_seconds": 90, "rate_window_seconds": 5,
     "rate_basis": "source_ip_five_second_sampled_payload_rate",
     "rate_scope": "source_ip", "retention_days": 7, "local_cache_hours": 24,
-    "detail_dedup_window_seconds": 5,
+    "detail_dedup_window_seconds": 60,
     "detail_dedup_basis": "source_ip_site_entry_fixed_window",
     "summary_scope": "current_beijing_calendar_month_to_latest",
     "summary_grouping": "source_ip_node_site",
@@ -165,13 +165,13 @@ def check_project(root, baseline=False):
             ("rates.py", "RATE_WINDOW_SECONDS", 5),
             ("rates.py", "RATE_BASIS", CONTRACT["rate_basis"]),
             ("presentation.py", "COLUMNS", tuple(VIEWS["审计明细"])),
-            ("presentation.py", "DETAIL_DEDUP_WINDOW_SECONDS", 5),
+            ("presentation.py", "DETAIL_DEDUP_WINDOW_SECONDS", CONTRACT["detail_dedup_window_seconds"]),
             ("presentation.py", "DETAIL_DEDUP_BASIS", CONTRACT["detail_dedup_basis"]),
             ("presentation.py", "SUMMARY_VIEW_COLUMNS", tuple(VIEWS["流量汇总"])),
             ("presentation.py", "SUMMARY_VIEW_SCOPE", CONTRACT["summary_scope"]),
             ("presentation.py", "SUMMARY_VIEW_GROUPING", CONTRACT["summary_grouping"]),
             ("presentation.py", "SUMMARY_VIEW_TIME_BASIS", CONTRACT["summary_time_basis"]),
-            ("query.py", "DETAIL_DEDUP_WINDOW_SECONDS", 5),
+            ("query.py", "DETAIL_DEDUP_WINDOW_SECONDS", CONTRACT["detail_dedup_window_seconds"]),
             ("query.py", "DETAIL_DEDUP_BASIS", CONTRACT["detail_dedup_basis"]),
             ("query.py", "SUMMARY_VIEW_COLUMNS", tuple(VIEWS["流量汇总"])),
             ("query.py", "SUMMARY_VIEW_SCOPE", CONTRACT["summary_scope"]),
@@ -327,12 +327,12 @@ def check_project(root, baseline=False):
         detail = views["审计明细"]
         for guard in ("%Y/%m/%d %H:%i", "c.source_ip IS NULL",
                       "c.source_peer='172.30.3.3' AND (c.node IS NULL OR c.node='')", "203.0.113.103",
-                      "ROW_NUMBER() OVER", "_session_rank=1", "c.last_seen + 2.5",
+                      "ROW_NUMBER() OVER", "_session_rank=1", "c.last_seen / 60",
                       "c.site IS NULL OR c.site=''", "LOWER(c.site)='unknown'", "g.location",
                       "AS `IP归属地`", "LEFT JOIN ip_geo g ON g.source_ip=c.source_ip"):
             require(guard in detail, f"view identity/time/dedup guard missing: {guard}")
         presentation = text("presentation.py")
-        for guard in ("ROW_NUMBER() OVER", "_session_rank=1", "c.last_seen + 2.5",
+        for guard in ("ROW_NUMBER() OVER", "_session_rank=1", "c.last_seen / 60",
                       "lower(c.site)='unknown'"):
             require(guard in presentation, f"SQLite detail dedup guard missing: {guard}")
         summary = views["流量汇总"]

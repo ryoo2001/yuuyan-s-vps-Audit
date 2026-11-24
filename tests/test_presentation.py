@@ -255,7 +255,7 @@ class PresentationTests(unittest.TestCase):
         self.assertEqual(list(out['rows'][0].values()), list(self.row()))
         self.assertEqual(out['timezone'], 'Asia/Shanghai')
         self.assertEqual(out['time_basis'], 'last_observed')
-        self.assertEqual(out['deduplication']['window_seconds'], 5)
+        self.assertEqual(out['deduplication']['window_seconds'], 60)
         self.assertEqual(out['deduplication']['basis'], 'source_ip_site_entry_fixed_window')
         self.assertFalse(out['has_more'])
         self.assertEqual(before, self.store.db.total_changes)
@@ -280,15 +280,17 @@ class PresentationTests(unittest.TestCase):
         with self.assertRaises(QueryError):
             details(dict(self.cfg, mode='edge'), parse_args(['details']), self.now)
 
-    def test_minute_display_keeps_five_second_sessions_without_rate_reads(self):
+    def test_minute_display_merges_same_minute_and_keeps_next_minute_without_rate_reads(self):
         self.sample()
-        self.store.db.execute("UPDATE connection_state SET source_ip='198.51.100.27',node='entry-a0'")
         self.store.sample([self.conn(cid='two')], self.now+10, monotonic_now=110)
+        self.store.sample([self.conn(cid='three')], self.now+70, monotonic_now=170)
         self.store.db.execute("UPDATE connection_state SET source_ip='198.51.100.27',node='entry-a0'")
         self.store.db.execute('DROP TABLE connection_rates')
         rows = self.store.db.execute('SELECT * FROM "审计明细"').fetchall()
-        self.assertEqual(len(rows), 2)
-        self.assertEqual([row[0] for row in rows], ['2026/10/04 00:01'] * 2)
+        # 'one' and 'two' are 10 s apart in the same displayed minute: one row; 'three' is the next minute.
+        self.assertEqual([row[0] for row in rows], ['2026/10/04 00:02', '2026/10/04 00:01'])
+        # Facts are never merged, only the display.
+        self.assertEqual(self.store.db.execute('SELECT COUNT(*) FROM connection_state').fetchone()[0], 3)
 
     def test_route_config_validation(self):
         invalid = dict(self.cfg, entry_routes=[{'node':'not-a-peer','inbound_port':31100,'tunnel_ip':'10.0.0.2'}])

@@ -21,6 +21,19 @@ class ArchiveTests(unittest.TestCase):
         result=archive.query_month(self.store,'region','2026-10');self.assertEqual(result['totals']['total_bytes'],60)
         self.assertFalse(result['imported_into_mysql']);self.assertTrue(result['explicit_load'])
         self.assertFalse(list(Path(self.temp.name).glob('.query-*')))
+    def test_rows_are_chunked_per_beijing_day_inside_the_month_folder(self):
+        # 1791000000 is 2026-10-03 08:40 Beijing; the second row is the next Beijing day.
+        files=self.store.write('region','','samples',[sample('a'),sample('b',stamp=1791000000.+86400)])
+        self.assertEqual([(f['month'],f['day'],f['rows']) for f in files],[('2026-10','2026-10-03',1),('2026-10','2026-10-04',1)])
+        self.assertTrue(all(f['file'].replace('\\','/').startswith('region/2026-10/') for f in files))
+        self.assertEqual(archive.query_month(self.store,'region','2026-10')['totals']['total_bytes'],60)
+    def test_large_raw_tables_leave_after_48_hours_small_tables_after_14_days(self):
+        import tier_policy
+        now=1792000000
+        for name in ('samples','visits','connection_state','connection_rates'):
+            self.assertEqual(tier_policy.archive_cutoff(name,now),now-48*3600)
+        for name in ('wire_samples','traffic_rollup'):
+            self.assertEqual(tier_policy.archive_cutoff(name,now),now-14*86400)
     def test_duplicate_and_out_of_order_revisions_do_not_double_count(self):
         self.store.write('region','','samples',[sample(seq=3,up=50)],written_ns=10)
         self.store.write('region','','samples',[sample(seq=2,up=100)],written_ns=20)
@@ -74,7 +87,7 @@ class ArchiveTests(unittest.TestCase):
             self.assertFalse((self.store.root/'.cursor.json').exists())
 
     def _check_failing_source_yields(self):
-        with patch.object(archive,'discover',return_value=[('region',''),('region','two_')]),patch.object(archive.monthbook,'retire'):
+        with patch.object(archive,'discover',return_value=[('region',''),('region','two_')]),patch.object(archive.monthbook,'retire'),patch.object(archive,'trim_hourly',return_value=[]):
             with patch.object(archive,'archive_batch',side_effect=OSError('one_source_failed')):
                 with self.assertRaises(OSError):archive.run(None,self.store,budget=1)
             with patch.object(archive,'archive_batch',return_value={'rows':0,'files':[]}) as batch:
@@ -82,7 +95,7 @@ class ArchiveTests(unittest.TestCase):
                 self.assertEqual(batch.call_args_list[0].args[2:5],('region','two_','samples'))
                 self.assertEqual(batch.call_count,12);self.assertEqual(len(result['sources']),2)
     def run_once(self,now):
-        with patch.object(archive,'discover',return_value=[('region','')]),patch.object(archive.monthbook,'retire'),              patch.object(archive,'archive_batch',return_value={'rows':0,'files':[]}):
+        with patch.object(archive,'discover',return_value=[('region','')]),patch.object(archive.monthbook,'retire'),patch.object(archive,'trim_hourly',return_value=[]),              patch.object(archive,'archive_batch',return_value={'rows':0,'files':[]}):
             return archive.run(None,self.store,budget=5,now=now)
     def test_open_month_parts_are_never_listed_by_the_worker(self):
         import datetime as dt

@@ -19,7 +19,7 @@ import time
 from model import TABLES
 import storage
 import monthbook
-from tier_policy import ARCHIVE_ROOT, HOT_DAYS, ONLINE_DAYS, metadata
+from tier_policy import ARCHIVE_ROOT, HOT_DAYS, ONLINE_DAYS, archive_cutoff, metadata
 
 TZ = timezone(timedelta(hours=8))
 ROLLUP_COLUMNS = 'day_start source_ip node site upload_bytes download_bytes latest_ts'.split()
@@ -91,15 +91,16 @@ class Store:
     def write(self, database, prefix, name, rows, written_ns=None):
         storage.validate(database, (prefix,))
         columns, keys, stamp = specification(name)
-        months = defaultdict(list)
+        # One chunk per Beijing day so a later read can fetch single days.
+        days = defaultdict(list)
         for row in rows:
-            month = datetime.fromtimestamp(float(row[columns.index(stamp)]), TZ).strftime('%Y-%m')
-            months[month].append(list(row))
+            days[datetime.fromtimestamp(float(row[columns.index(stamp)]), TZ).strftime('%Y-%m-%d')].append(list(row))
         results = []
-        for month, selected in months.items():
+        for day, selected in sorted(days.items()):
+            month = day[:7]
             header = {'format':'audit-cold-v1', 'database':database, 'namespace':prefix,
                       'table':prefix+name, 'logical_table':name, 'columns':columns,
-                      'keys':keys, 'stamp':stamp, 'rows':len(selected),
+                      'keys':keys, 'stamp':stamp, 'rows':len(selected), 'day':day,
                       'written_ns':written_ns if written_ns is not None else time.time_ns(),
                       'coverage':'observed_rows_only_no_reconstruction'}
             raw = ('\n'.join([_json(header)] + [_json(row) for row in selected]) + '\n').encode()
@@ -123,7 +124,7 @@ class Store:
                 os.replace(temporary, destination); _fsync_directory(target)
             finally:
                 if Path(temporary).exists(): Path(temporary).unlink()
-            results.append({'month':month, 'file':str(destination.relative_to(self.root)),
+            results.append({'month':month, 'day':day, 'file':str(destination.relative_to(self.root)),
                             'rows':len(selected), 'bytes':len(blob), 'sha256':digest})
         return results
 
@@ -205,10 +206,27 @@ class Store:
             if temporary.exists(): temporary.unlink()
 
 
+def chunk_index_ddl(database):
+    """Where each day's chunks live, so a reader never lists a remote month folder."""
+    return ('CREATE TABLE IF NOT EXISTS '+storage.table(database,'','archive_chunks')+' ('
+            'digest CHAR(64) CHARACTER SET ascii COLLATE ascii_bin PRIMARY KEY,namespace VARCHAR(32) NOT NULL,'
+            'logical_table VARCHAR(32) NOT NULL,day DATE NOT NULL,filename VARCHAR(255) NOT NULL,'
+            'row_count INT NOT NULL,byte_count BIGINT NOT NULL,written_at DOUBLE NOT NULL,'
+            'KEY by_day(day,namespace,logical_table)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin')
+
+
+def _ensure_chunk_index(db, store, database):
+    done = store.__dict__.setdefault('chunk_indexes', set())
+    if database not in done:
+        with db.cursor() as c: c.execute(chunk_index_ddl(database))
+        done.add(database)
+
+
 def archive_batch(db, store, database, prefix, name, cutoff, limit=BATCH):
     columns, keys, stamp = specification(name)
     physical = storage.table(database,prefix,name)
     quoted = ','.join(storage.identifier(c) for c in columns)
+    if isinstance(store, Store): _ensure_chunk_index(db, store, database)
     db.begin()
     try:
         with db.cursor() as c:
@@ -219,6 +237,11 @@ def archive_batch(db, store, database, prefix, name, cutoff, limit=BATCH):
             if not rows: db.commit(); return {'rows':0,'files':[]}
             files=store.write(database,prefix,name,rows)
             calendar=monthbook.prepare(db,store,database,prefix,name,rows,files) if isinstance(store,Store) else None
+            if isinstance(store,Store):
+                # Same transaction as the delete: a rolled-back batch leaves no index row.
+                c.executemany('INSERT INTO '+storage.table(database,'','archive_chunks')+' VALUES(%s,%s,%s,%s,%s,%s,%s,%s) '
+                    'ON DUPLICATE KEY UPDATE digest=VALUES(digest)',
+                    [(f['sha256'],prefix,name,f['day'],Path(f['file']).name,f['rows'],f['bytes'],time.time()) for f in files])
             where=' AND '.join(storage.identifier(k)+'=%s' for k in keys)
             guarded_keys=list(keys)
             if '_seq' in columns:
@@ -251,10 +274,32 @@ def discover(db):
     return result
 
 
+HOURLY_TRIM_SECONDS = 86400
+
+
+def trim_hourly(db, store, sources, now):
+    """At most daily: drop traffic_hourly rows past their retention, where installed."""
+    marker = store.state_root/'.hourly-trim'
+    if marker.exists() and 0 <= now-marker.stat().st_mtime < HOURLY_TRIM_SECONDS: return []
+    import hourly
+    result = []
+    for database, prefix in sources:
+        with db.cursor() as c:
+            c.execute('SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s',
+                      (database, prefix+'traffic_hourly'))
+            installed = c.fetchone()
+        if installed: result.append({'database':database, **hourly.trim(db, database, prefix, now=now)})
+    marker.touch(); os.utime(marker, (now, now))
+    return result
+
+
 def run(db,store,budget=20,now=None):
     now=time.time() if now is None else now;cutoff=now-ONLINE_DAYS*86400;deadline=time.monotonic()+budget
-    sources=discover(db);report={'policy':metadata(),'cutoff':cutoff,'sources':[],'packed':[]}
+    # Month sealing still follows the longest online window (small tables keep 14 days).
+    sources=discover(db);report={'policy':metadata(),'cutoff':cutoff,'raw_hot_cutoff':archive_cutoff('samples',now),
+                                 'sources':[],'packed':[]}
     monthbook.retire(db,store,{d for d,_ in sources})
+    report['hourly_trimmed']=trim_hourly(db,store,sources,now)
     for database,prefix in sources:
         report['sources'].append({'database':database,'namespace':prefix,'rows':0,'files':0,'archive_bytes':0})
     names=[n for n in TABLES if TABLES[n][2]]+['traffic_rollup']
@@ -273,7 +318,7 @@ def run(db,store,budget=20,now=None):
         temporary=store.state_root/'.cursor.tmp'
         temporary.write_text(_json([following['database'],following['namespace'],next_name]));temporary.chmod(0o600)
         os.replace(temporary,cursor)
-        out=archive_batch(db,store,item['database'],item['namespace'],name,cutoff)
+        out=archive_batch(db,store,item['database'],item['namespace'],name,archive_cutoff(name,now))
         item['rows']+=out['rows'];item['files']+=len(out['files']);item['archive_bytes']+=sum(f['bytes'] for f in out['files'])
         idle=idle+1 if not out['rows'] else 0
     for database in sorted({d for d,_ in sources}):

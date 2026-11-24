@@ -208,7 +208,8 @@ class CentralDetailReadTests(unittest.TestCase):
             self.row('other', 100.0, site='other.test'),
         ]
         args = types.SimpleNamespace(limit=2, source_ip=None, domain=None)
-        rows = central_query._read_details(cursor, args)
+        rows, history = central_query._read_details(cursor, args)
+        self.assertIsNone(history)
         self.assertNotIn('connection_rates', cursor.execute.call_args.args[0])
         self.assertEqual(len(rows), 2)
         self.assertEqual(rows[0][0], '1970/01/01 08:01')
@@ -216,9 +217,9 @@ class CentralDetailReadTests(unittest.TestCase):
 
     def test_reader_stops_after_enough_ordered_rows(self):
         cursor = MagicMock()
-        cursor.fetchall.return_value = [self.row(str(i), 1000.0 - i * 10) for i in range(60)]
+        cursor.fetchall.return_value = [self.row(str(i), 1000.0 - i * 10, site='s%d.test' % i) for i in range(60)]
         args = types.SimpleNamespace(limit=50, source_ip=None, domain=None)
-        rows = central_query._read_details(cursor, args)
+        rows, _ = central_query._read_details(cursor, args)
         self.assertEqual(len(rows), 51)
         self.assertEqual(cursor.execute.call_count, 1)
 

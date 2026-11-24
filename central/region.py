@@ -11,6 +11,7 @@ import storage
 import tiering
 import monthbook
 import detail_view
+import hourly
 
 
 def _digest(value):
@@ -55,7 +56,8 @@ def install_namespace(db, database, prefix, *, indexes=True):
             raise ValueError('existing_storage_definition_changed')
         c.execute("SELECT TRIGGER_NAME,ACTION_STATEMENT,DEFINER FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=%s AND ACTION_TIMING='AFTER' AND EVENT_OBJECT_TABLE IN (%s,%s)",
                   (database,prefix+'samples',prefix+'traffic_rollup'))
-        live_triggers=c.fetchall()
+        # Hourly totals own their triggers (central/hourly.py); they are not part of this fingerprint.
+        live_triggers=[r for r in c.fetchall() if hourly.TRIGGER_SUFFIX not in r[0]]
         existing={r[0] for r in live_triggers}
         if existing-set(statements):
             raise ValueError('unexpected_existing_trigger')
